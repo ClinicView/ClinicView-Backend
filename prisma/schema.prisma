@@ -1,0 +1,254 @@
+// Prisma schema — Plataforma Clínica Hospitalaria
+// Fuente de verdad: docs/database/README.md
+// Cambios de esquema SOLO por migración (prisma migrate dev).
+// ia/ y RPA nunca acceden a esta BD; solo el backend persiste.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum RecordType {
+  CONSULTATION  // Consulta / atención clínica
+  LAB_RESULT    // Resultado de laboratorio
+  PRESCRIPTION  // Prescripción / receta
+  THERAPY_NOTE  // Nota de terapia
+  EVOLUTION     // Nota de evolución / seguimiento
+  PROCEDURE     // Procedimiento realizado
+  OTHER
+}
+
+enum RecordOrigin {
+  MANUAL     // Ingreso manual por el profesional
+  DIGITIZED  // Extraído de documento digitalizado
+}
+
+enum RecordStatus {
+  ACTIVE     // Estado normal
+  CORRECTED  // Reemplazado por una corrección posterior
+  VOIDED     // Anulado (con razón documentada)
+}
+
+enum DocumentStatus {
+  PENDING     // Recién subido, pendiente de procesamiento
+  PROCESSING  // En proceso de OCR/NER
+  PROCESSED   // OCR/NER completado, listo para revisión
+  FAILED      // Error en procesamiento
+  VALIDATED   // Aprobado por revisor clínico
+  REJECTED    // Rechazado por revisor clínico
+}
+
+enum DocumentType {
+  DNI
+  CE
+  PAS
+  OTHER
+}
+
+enum Sex {
+  M
+  F
+  OTHER
+}
+
+// ─── Identidad y acceso ───────────────────────────────────────────────────────
+// Fase inicial: users, roles y permissions.
+// El resto del modelo (clinical_records, medical_documents, etc.)
+// se añade por migraciones sucesivas según docs/database/README.md.
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique
+  username     String    @unique
+  firstName    String    @map("first_name")
+  lastName     String    @map("last_name")
+  fullName     String    @map("full_name")
+  documentType DocumentType? @map("document_type")
+  documentNumber String? @unique @map("document_number")
+  profession   String?
+  passwordHash String    @map("password_hash")
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  createdBy    String?   @map("created_by") @db.Uuid
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  updatedBy    String?   @map("updated_by") @db.Uuid
+  version      Int       @default(0)
+
+  userRoles     UserRole[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+model Role {
+  id          String  @id @default(uuid()) @db.Uuid
+  key         String  @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String  @id @default(uuid()) @db.Uuid
+  key         String  @unique
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  userId String @map("user_id") @db.Uuid
+  roleId String @map("role_id") @db.Uuid
+
+  user User @relation(fields: [userId], references: [id])
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ─── Refresh tokens ───────────────────────────────────────────────────────────
+// Se almacena el hash SHA-256 del token, nunca el token en claro.
+// La rotación (refresh) elimina el hash anterior e inserta el nuevo atómicamente.
+// onDelete: Cascade garantiza limpieza si el usuario se elimina físicamente.
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ─── Pacientes ────────────────────────────────────────────────────────────────
+// Datos demográficos / filiación. Sin campos clínicos específicos.
+// Referenciado por clinical_records, medical_documents (relaciones inversas).
+
+model Patient {
+  id             String       @id @default(uuid()) @db.Uuid
+  documentType   DocumentType @map("document_type")
+  documentNumber String       @map("document_number")
+  firstName      String       @map("first_name")
+  lastName       String       @map("last_name")
+  dateOfBirth    DateTime     @map("date_of_birth") @db.Date
+  sex            Sex
+  phone          String?
+  email          String?
+  address        String?
+  isActive       Boolean      @default(true) @map("is_active")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  createdBy      String?      @map("created_by") @db.Uuid
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  updatedBy      String?      @map("updated_by") @db.Uuid
+  version        Int          @default(0)
+
+  @@unique([documentType, documentNumber])
+  @@map("patients")
+
+  clinicalRecords  ClinicalRecord[]
+  medicalDocuments MedicalDocument[]
+}
+
+// ─── Historias clínicas ───────────────────────────────────────────────────────
+// Cada registro es inmutable en esencia: las correcciones crean un nuevo
+// ClinicalRecord con parentRecordId apuntando al anterior (que queda CORRECTED).
+// Las anulaciones cambian status a VOIDED y persisten la razón (voidReason).
+
+model ClinicalRecord {
+  id             String       @id @default(uuid()) @db.Uuid
+  patientId      String       @map("patient_id") @db.Uuid
+  recordType     RecordType   @map("record_type")
+  origin         RecordOrigin @default(MANUAL)
+  status         RecordStatus @default(ACTIVE)
+
+  attendedAt     DateTime     @map("attended_at") @db.Timestamptz
+  summary        String
+  notes          String?
+
+  // Cadena de correcciones: si este registro es una corrección, apunta al previo.
+  parentRecordId String?      @map("parent_record_id") @db.Uuid
+
+  voidReason     String?      @map("void_reason")
+
+  createdAt      DateTime     @default(now()) @map("created_at")
+  createdBy      String?      @map("created_by") @db.Uuid
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  updatedBy      String?      @map("updated_by") @db.Uuid
+  version        Int          @default(0)
+
+  patient         Patient         @relation(fields: [patientId], references: [id])
+  parentRecord    ClinicalRecord? @relation("CorrectionChain", fields: [parentRecordId], references: [id])
+  corrections     ClinicalRecord[] @relation("CorrectionChain")
+
+  @@index([patientId, attendedAt(sort: Desc)])
+  @@index([patientId, status])
+  @@map("clinical_records")
+}
+
+// ─── Documentos médicos ───────────────────────────────────────────────────────
+// El archivo físico se almacena fuera de la BD (UPLOAD_DIR).
+// storagePath es relativo a UPLOAD_DIR — nunca se expone directo al cliente.
+// originalName se usa solo para display y Content-Disposition.
+
+model MedicalDocument {
+  id           String         @id @default(uuid()) @db.Uuid
+  patientId    String         @map("patient_id") @db.Uuid
+  originalName String         @map("original_name")
+  storagePath  String         @map("storage_path")
+  mimeType     String         @map("mime_type")
+  sizeBytes    Int            @map("size_bytes")
+  status       DocumentStatus @default(PENDING)
+  ocrText      String?        @map("ocr_text")
+  nerEntities  Json?          @map("ner_entities")
+  correctedText String?       @map("corrected_text")
+  correctedEntities Json?     @map("corrected_entities")
+  correctedAt  DateTime?      @map("corrected_at")
+  correctedById String?       @map("corrected_by_id") @db.Uuid
+  rejectReason String?        @map("reject_reason")
+  processedAt  DateTime?      @map("processed_at")
+  reviewedAt   DateTime?      @map("reviewed_at")
+  reviewedBy   String?        @map("reviewed_by") @db.Uuid
+  createdAt    DateTime       @default(now()) @map("created_at")
+  createdBy    String?        @map("created_by") @db.Uuid
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  updatedBy    String?        @map("updated_by") @db.Uuid
+  version      Int            @default(0)
+
+  patient Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, createdAt(sort: Desc)])
+  @@index([status])
+  @@map("medical_documents")
+}

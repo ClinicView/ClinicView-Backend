@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables (keep .env.example)
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# Logs
+*.log
+logs/
+
+# Uploads (user files, not part of the source)
+uploads/
+
+# Test coverage
+coverage/
+
+# Build artifacts
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# AI coding instructions (not part of the source)
+AGENTS.md
+CONTEXT.md
+src/**/CONTEXT.md
+src/**/README.md

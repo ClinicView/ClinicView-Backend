@@ -9,6 +9,8 @@ COPY . .
 ENV DATABASE_URL=postgresql://dummy:dummy@localhost:5432/dummy
 RUN npx prisma generate
 RUN npm run build
+# Verificar que el build produjo el archivo esperado
+RUN ls -la dist/ && test -f dist/main.js && echo "Build OK: dist/main.js exists"
 
 ENV NODE_ENV=production
 EXPOSE 3001

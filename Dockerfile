@@ -14,4 +14,4 @@ RUN ls -la dist/src/ && test -f dist/src/main.js && echo "Build OK: dist/src/mai
 
 ENV NODE_ENV=production
 EXPOSE 3001
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main"]
+CMD ["sh", "-c", "npx prisma migrate deploy && npx prisma db seed && node dist/src/main"]

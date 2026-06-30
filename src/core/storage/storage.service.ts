@@ -1,5 +1,5 @@
 import { createReadStream, mkdirSync, ReadStream } from 'fs';
-import { unlink, writeFile } from 'fs/promises';
+import { readFile, unlink, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -25,6 +25,10 @@ export class StorageService implements OnModuleInit {
 
   createReadStream(relativePath: string): ReadStream {
     return createReadStream(join(this.uploadDir, relativePath));
+  }
+
+  async readFile(relativePath: string): Promise<Buffer> {
+    return readFile(join(this.uploadDir, relativePath));
   }
 
   async delete(relativePath: string): Promise<void> {

@@ -23,16 +23,12 @@ export class IaClientService {
     this.baseUrl = this.configService.get<string>('ia.internalUrl', 'http://ia:8000');
   }
 
-  /**
-   * Punto de extensión: cuando se elija el motor real, reemplazar la llamada HTTP
-   * o delegar a un adaptador en core/ia/adapters/. fileRef en esta etapa es una
-   * ruta local; en producción será una URL firmada de almacenamiento (ver ADR-0010).
-   */
   async process(
     documentId: string,
-    fileRef: string,
+    fileBytes: Buffer,
     mimeType: 'image/jpeg' | 'image/png' | 'application/pdf',
   ): Promise<ProcessResult> {
+    const fileRef = `data:${mimeType};base64,${fileBytes.toString('base64')}`;
     const body = JSON.stringify({
       documentId,
       fileRef,

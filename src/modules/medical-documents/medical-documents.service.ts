@@ -129,7 +129,8 @@ export class MedicalDocumentsService {
 
     try {
       const allowedMime = doc.mimeType as 'image/jpeg' | 'image/png' | 'application/pdf';
-      const result = await this.iaClient.process(doc.id, doc.storagePath, allowedMime);
+      const fileBytes = await this.storage.readFile(doc.storagePath);
+      const result = await this.iaClient.process(doc.id, fileBytes, allowedMime);
 
       const updated = await this.repo.updateStatus(id, DocumentStatus.PROCESSED, {
         ocrText: result.ocrText,

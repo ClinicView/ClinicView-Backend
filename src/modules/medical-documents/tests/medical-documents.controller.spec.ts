@@ -37,6 +37,7 @@ const mockService = {
   validate: jest.fn(),
   saveCorrection: jest.fn(),
   reject: jest.fn(),
+  searchByKeyword: jest.fn(),
 } satisfies Record<keyof MedicalDocumentsService, jest.Mock>;
 
 const req = { user: { sub: 'user-uuid' } };

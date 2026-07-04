@@ -9,9 +9,48 @@ export interface ExtractedEntity {
   confidence: number;
 }
 
+/**
+ * Métricas de calidad OCR/NER del servicio IA v2 (normalizadas a camelCase).
+ * estimated=true cuando el worker no tuvo texto de referencia y los valores
+ * derivan de la confianza del modelo.
+ */
+export interface OcrMetrics {
+  cer: number | null;
+  wer: number | null;
+  charAccuracy: number | null;
+  nerPrecision: number | null;
+  nerRecall: number | null;
+  nerF1: number | null;
+  estimated: boolean;
+}
+
+export type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW';
+
 export interface ProcessResult {
   ocrText: string;
   entities: ExtractedEntity[];
+  /** null cuando el worker (v1/Tesseract) no devuelve métricas. */
+  metrics: OcrMetrics | null;
+  ocrConfidence: number | null;
+  confidenceLevel: ConfidenceLevel | null;
+}
+
+/** Forma del campo metrics tal como lo emite el servicio IA v2 (snake_case). */
+interface RawMetrics {
+  cer?: number | null;
+  wer?: number | null;
+  char_accuracy?: number | null;
+  ner_precision?: number | null;
+  ner_recall?: number | null;
+  ner_f1?: number | null;
+  estimated?: boolean;
+}
+
+interface RawProcessResponse {
+  ocr: { text: string };
+  entities: ExtractedEntity[];
+  metrics?: RawMetrics | null;
+  confidence?: { overall?: number; level?: string } | null;
 }
 
 @Injectable()
@@ -50,12 +89,33 @@ export class IaClientService {
       throw new Error(`IA process failed with status ${res.status}: ${detail}`);
     }
 
-    const data = (await res.json()) as {
-      ocr: { text: string };
-      entities: ExtractedEntity[];
-    };
+    const data = (await res.json()) as RawProcessResponse;
 
-    return { ocrText: data.ocr.text, entities: data.entities };
+    return {
+      ocrText: data.ocr.text,
+      entities: data.entities,
+      metrics: this.normalizeMetrics(data.metrics),
+      ocrConfidence: typeof data.confidence?.overall === 'number' ? data.confidence.overall : null,
+      confidenceLevel: this.normalizeLevel(data.confidence?.level),
+    };
+  }
+
+  private normalizeMetrics(raw: RawMetrics | null | undefined): OcrMetrics | null {
+    if (!raw) return null;
+    return {
+      cer: raw.cer ?? null,
+      wer: raw.wer ?? null,
+      charAccuracy: raw.char_accuracy ?? null,
+      nerPrecision: raw.ner_precision ?? null,
+      nerRecall: raw.ner_recall ?? null,
+      nerF1: raw.ner_f1 ?? null,
+      estimated: raw.estimated ?? true,
+    };
+  }
+
+  private normalizeLevel(level: string | undefined): ConfidenceLevel | null {
+    if (level === 'HIGH' || level === 'MEDIUM' || level === 'LOW') return level;
+    return null;
   }
 
   private async readErrorDetail(res: Response): Promise<string> {

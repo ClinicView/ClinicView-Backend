@@ -16,6 +16,9 @@ export interface UpdateStatusExtra {
   correctedAt?: Date | null;
   correctedById?: string | null;
   rejectReason?: string | null;
+  metrics?: Prisma.InputJsonValue | typeof Prisma.JsonNull;
+  ocrConfidence?: number | null;
+  confidenceLevel?: string | null;
   processedAt?: Date;
   reviewedAt?: Date;
   reviewedBy?: string | null;
@@ -55,6 +58,36 @@ export class MedicalDocumentsRepository {
 
   async findByIdAndPatient(id: string, patientId: string): Promise<MedicalDocument | null> {
     return this.prisma.medicalDocument.findFirst({ where: { id, patientId } });
+  }
+
+  /** Búsqueda por palabra clave en el texto OCR/corregido del paciente. */
+  async searchByPatient(
+    patientId: string,
+    keyword: string,
+    page: number,
+    limit: number,
+  ): Promise<{ documents: MedicalDocument[]; total: number }> {
+    const where: Prisma.MedicalDocumentWhereInput = {
+      patientId,
+      OR: [
+        { ocrText: { contains: keyword, mode: 'insensitive' } },
+        { correctedText: { contains: keyword, mode: 'insensitive' } },
+        { originalName: { contains: keyword, mode: 'insensitive' } },
+      ],
+    };
+    const skip = (page - 1) * limit;
+
+    const [documents, total] = await this.prisma.$transaction([
+      this.prisma.medicalDocument.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.medicalDocument.count({ where }),
+    ]);
+
+    return { documents, total };
   }
 
   async updateStatus(

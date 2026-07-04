@@ -237,6 +237,9 @@ model MedicalDocument {
   correctedAt  DateTime?      @map("corrected_at")
   correctedById String?       @map("corrected_by_id") @db.Uuid
   rejectReason String?        @map("reject_reason")
+  metrics         Json?       @map("metrics")
+  ocrConfidence   Float?      @map("ocr_confidence")
+  confidenceLevel String?     @map("confidence_level")
   processedAt  DateTime?      @map("processed_at")
   reviewedAt   DateTime?      @map("reviewed_at")
   reviewedBy   String?        @map("reviewed_by") @db.Uuid

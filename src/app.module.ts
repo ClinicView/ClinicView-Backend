@@ -11,6 +11,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { IaClientModule } from './core/ia/ia-client.module';
 import { StorageModule } from './core/storage/storage.module';
 import { ClinicalRecordsModule } from './modules/clinical-records/clinical-records.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { MedicalDocumentsModule } from './modules/medical-documents/medical-documents.module';
 import { PatientsModule } from './modules/patients/patients.module';
 import { ReviewModule } from './modules/review/review.module';
@@ -30,6 +31,7 @@ import { UsersModule } from './modules/users/users.module';
     RolesModule,
     PatientsModule,
     ClinicalRecordsModule,
+    DashboardModule,
     MedicalDocumentsModule,
     ReviewModule,
   ],

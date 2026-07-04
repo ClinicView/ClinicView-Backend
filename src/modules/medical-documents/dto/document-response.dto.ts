@@ -49,6 +49,24 @@ export class DocumentResponseDto {
   @ApiPropertyOptional({ type: String, nullable: true }) correctedAt: Date | null;
   @ApiPropertyOptional({ type: String, nullable: true }) correctedById: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) rejectReason: string | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: 'object',
+    description: 'Métricas de calidad OCR/NER del servicio IA v2',
+    properties: {
+      cer: { type: 'number', nullable: true },
+      wer: { type: 'number', nullable: true },
+      charAccuracy: { type: 'number', nullable: true },
+      nerPrecision: { type: 'number', nullable: true },
+      nerRecall: { type: 'number', nullable: true },
+      nerF1: { type: 'number', nullable: true },
+      estimated: { type: 'boolean' },
+    },
+  })
+  metrics: unknown;
+  @ApiPropertyOptional({ type: Number, nullable: true }) ocrConfidence: number | null;
+  @ApiPropertyOptional({ type: String, nullable: true, enum: ['HIGH', 'MEDIUM', 'LOW'] })
+  confidenceLevel: string | null;
   @ApiProperty() createdAt: Date;
   @ApiPropertyOptional({ type: String, nullable: true }) createdBy: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) processedAt: Date | null;

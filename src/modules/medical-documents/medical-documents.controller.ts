@@ -36,6 +36,7 @@ import { CorrectDocumentDto } from './dto/correct-document.dto';
 import { DocumentResponseDto } from './dto/document-response.dto';
 import { FindDocumentsQueryDto } from './dto/find-documents-query.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
+import { SearchDocumentsQueryDto } from './dto/search-documents-query.dto';
 
 const DEFAULT_UPLOAD_MAX_SIZE_MB = 20;
 
@@ -95,6 +96,17 @@ export class MedicalDocumentsController {
     @Query() query: FindDocumentsQueryDto,
   ) {
     return this.service.findByPatient(patientId, query);
+  }
+
+  @Get('search')
+  @RequirePermissions('documents.read')
+  @ApiOperation({ summary: 'Buscar por palabra clave en el texto OCR/corregido de los documentos del paciente' })
+  @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
+  search(
+    @Param('patientId', ParseUUIDPipe) patientId: string,
+    @Query() query: SearchDocumentsQueryDto,
+  ) {
+    return this.service.searchByKeyword(patientId, query.q, query.page ?? 1, query.limit ?? 20);
   }
 
   @Get(':id')

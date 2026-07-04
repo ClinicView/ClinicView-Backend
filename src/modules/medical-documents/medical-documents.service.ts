@@ -35,6 +35,20 @@ function getUploadMaxSizeBytes(): number {
   return sizeMb * 1024 * 1024;
 }
 
+const SNIPPET_CONTEXT_CHARS = 80;
+
+/** Extrae un fragmento del texto alrededor de la primera coincidencia. */
+function buildSnippet(text: string | null, keyword: string): string | null {
+  if (!text) return null;
+  const index = text.toLowerCase().indexOf(keyword.toLowerCase());
+  if (index < 0) return null;
+  const start = Math.max(0, index - SNIPPET_CONTEXT_CHARS);
+  const end = Math.min(text.length, index + keyword.length + SNIPPET_CONTEXT_CHARS);
+  const prefix = start > 0 ? '…' : '';
+  const suffix = end < text.length ? '…' : '';
+  return `${prefix}${text.slice(start, end).replace(/\s+/g, ' ').trim()}${suffix}`;
+}
+
 @Injectable()
 export class MedicalDocumentsService {
   private readonly logger = new Logger(MedicalDocumentsService.name);
@@ -135,6 +149,11 @@ export class MedicalDocumentsService {
       const updated = await this.repo.updateStatus(id, DocumentStatus.PROCESSED, {
         ocrText: result.ocrText,
         nerEntities: result.entities as unknown as Prisma.InputJsonValue,
+        ...(result.metrics && {
+          metrics: result.metrics as unknown as Prisma.InputJsonValue,
+        }),
+        ocrConfidence: result.ocrConfidence,
+        confidenceLevel: result.confidenceLevel,
         processedAt: new Date(),
         ...(userId && { updatedBy: userId }),
       });
@@ -220,6 +239,34 @@ export class MedicalDocumentsService {
     return this.toResponse(updated);
   }
 
+  async searchByKeyword(
+    patientId: string,
+    keyword: string,
+    page = 1,
+    limit = 20,
+  ): Promise<{
+    data: Array<DocumentResponseDto & { snippet: string | null }>;
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const query = keyword.trim();
+    if (query.length < 2) {
+      throw new BadRequestException('El término de búsqueda debe tener al menos 2 caracteres.');
+    }
+
+    const { documents, total } = await this.repo.searchByPatient(patientId, query, page, limit);
+    return {
+      data: documents.map((doc) => ({
+        ...this.toResponse(doc),
+        snippet: buildSnippet(doc.correctedText ?? doc.ocrText, query),
+      })),
+      total,
+      page,
+      limit,
+    };
+  }
+
   private toResponse(doc: MedicalDocument): DocumentResponseDto {
     return {
       id: doc.id,
@@ -235,6 +282,9 @@ export class MedicalDocumentsService {
       correctedAt: doc.correctedAt,
       correctedById: doc.correctedById,
       rejectReason: doc.rejectReason,
+      metrics: doc.metrics,
+      ocrConfidence: doc.ocrConfidence,
+      confidenceLevel: doc.confidenceLevel,
       createdAt: doc.createdAt,
       createdBy: doc.createdBy,
       processedAt: doc.processedAt,

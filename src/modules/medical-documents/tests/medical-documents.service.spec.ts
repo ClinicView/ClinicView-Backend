@@ -51,11 +51,13 @@ const mockRepo = {
   findByIdAndPatient: jest.fn(),
   updateStatus: jest.fn(),
   saveCorrection: jest.fn(),
+  searchByPatient: jest.fn(),
 } satisfies Record<keyof MedicalDocumentsRepository, jest.Mock>;
 
 const mockStorage = {
   save: jest.fn(),
   createReadStream: jest.fn(),
+  readFile: jest.fn(),
   delete: jest.fn(),
   onModuleInit: jest.fn(),
 } satisfies Record<keyof StorageService, jest.Mock>;

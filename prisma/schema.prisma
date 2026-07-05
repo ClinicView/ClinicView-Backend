@@ -197,6 +197,13 @@ model ClinicalRecord {
   summary        String
   notes          String?
 
+  // Contexto clínico de la atención (opcionales — rediseño julio 2026).
+  doctorName           String? @map("doctor_name")
+  service              String?
+  preliminaryDiagnosis String? @map("preliminary_diagnosis")
+  plan                 String?
+  priority             String  @default("NORMAL")
+
   // Cadena de correcciones: si este registro es una corrección, apunta al previo.
   parentRecordId String?      @map("parent_record_id") @db.Uuid
 

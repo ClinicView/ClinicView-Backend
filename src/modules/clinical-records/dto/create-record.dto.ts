@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEnum,
+  IsIn,
   IsISO8601,
   IsOptional,
   IsString,
@@ -8,6 +9,9 @@ import {
   MinLength,
 } from 'class-validator';
 import { RecordOrigin, RecordType } from '@prisma/client';
+
+export const RECORD_PRIORITIES = ['URGENT', 'PRIORITY', 'NORMAL', 'ELECTIVE'] as const;
+export type RecordPriority = (typeof RECORD_PRIORITIES)[number];
 
 export class CreateRecordDto {
   @ApiProperty({ enum: RecordType })
@@ -34,4 +38,33 @@ export class CreateRecordDto {
   @IsString()
   @MaxLength(4000)
   notes?: string;
+
+  @ApiPropertyOptional({ maxLength: 120, description: 'Médico o profesional responsable' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  doctorName?: string;
+
+  @ApiPropertyOptional({ maxLength: 120, description: 'Servicio o especialidad' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  service?: string;
+
+  @ApiPropertyOptional({ maxLength: 300 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  preliminaryDiagnosis?: string;
+
+  @ApiPropertyOptional({ maxLength: 2000, description: 'Indicaciones / plan de manejo' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  plan?: string;
+
+  @ApiPropertyOptional({ enum: RECORD_PRIORITIES, default: 'NORMAL' })
+  @IsOptional()
+  @IsIn(RECORD_PRIORITIES)
+  priority?: RecordPriority;
 }

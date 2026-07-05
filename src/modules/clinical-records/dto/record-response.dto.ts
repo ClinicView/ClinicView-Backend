@@ -10,6 +10,11 @@ export class RecordResponseDto {
   @ApiProperty() attendedAt: Date;
   @ApiProperty() summary: string;
   @ApiPropertyOptional({ type: String, nullable: true }) notes: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) doctorName: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) service: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) preliminaryDiagnosis: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) plan: string | null;
+  @ApiProperty({ enum: ['URGENT', 'PRIORITY', 'NORMAL', 'ELECTIVE'] }) priority: string;
   @ApiPropertyOptional({ type: String, nullable: true }) parentRecordId: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) voidReason: string | null;
   @ApiProperty() correctionsCount: number;

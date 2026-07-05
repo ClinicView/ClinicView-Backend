@@ -19,6 +19,12 @@ export class UsersService {
     private readonly hashingService: HashingService,
   ) {}
 
+  async searchProfessionals(
+    query: string,
+  ): Promise<Array<{ id: string; fullName: string; profession: string | null }>> {
+    return this.usersRepository.searchActiveProfessionals(query.trim());
+  }
+
   async create(dto: CreateUserDto): Promise<UserResponseDto> {
     await this.ensureUniqueIdentity(dto.email, dto.username, dto.documentNumber);
 

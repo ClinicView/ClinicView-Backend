@@ -55,6 +55,7 @@ describe('UsersService', () => {
             findRoleByKey: jest.fn(),
             findByEmailWithPermissions: jest.fn(),
             updateLastLogin: jest.fn(),
+            searchActiveProfessionals: jest.fn(),
           } satisfies Record<keyof UsersRepository, jest.Mock>,
         },
         {

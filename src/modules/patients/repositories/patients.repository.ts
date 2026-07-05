@@ -62,6 +62,47 @@ export class PatientsRepository {
     return this.prisma.patient.update({ where: { id }, data: { isActive: true } });
   }
 
+  /** Indicadores para el mini-dashboard de la lista de pacientes. */
+  async stats(): Promise<{
+    total: number;
+    active: number;
+    newThisMonth: number;
+    withPendingDocs: number;
+    withRecentDocs: number;
+  }> {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const [total, active, newThisMonth, pendingPatients, recentDocPatients] =
+      await this.prisma.$transaction([
+        this.prisma.patient.count(),
+        this.prisma.patient.count({ where: { isActive: true } }),
+        this.prisma.patient.count({ where: { createdAt: { gte: startOfMonth } } }),
+        this.prisma.medicalDocument.findMany({
+          where: {
+            status: { in: ['PENDING', 'PROCESSING', 'PROCESSED'] },
+            patient: { isActive: true },
+          },
+          select: { patientId: true },
+          distinct: ['patientId'],
+        }),
+        this.prisma.medicalDocument.findMany({
+          where: { createdAt: { gte: last30Days }, patient: { isActive: true } },
+          select: { patientId: true },
+          distinct: ['patientId'],
+        }),
+      ]);
+
+    return {
+      total,
+      active,
+      newThisMonth,
+      withPendingDocs: pendingPatients.length,
+      withRecentDocs: recentDocPatients.length,
+    };
+  }
+
   private buildWhere(options: FindManyOptions): Prisma.PatientWhereInput {
     const conditions: Prisma.PatientWhereInput[] = [{ isActive: true }];
 

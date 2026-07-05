@@ -41,6 +41,16 @@ export class PatientsService {
     return this.toResponse(patient);
   }
 
+  async stats(): Promise<{
+    total: number;
+    active: number;
+    newThisMonth: number;
+    withPendingDocs: number;
+    withRecentDocs: number;
+  }> {
+    return this.patientsRepository.stats();
+  }
+
   async findAll(
     query: FindPatientsQueryDto,
   ): Promise<PaginatedResponse<PatientResponseDto>> {

@@ -11,6 +11,7 @@ import {
 import { DocumentStatus, MedicalDocument, Prisma } from '@prisma/client';
 import { IaClientService } from '../../core/ia/ia-client.service';
 import { StorageService } from '../../core/storage/storage.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CorrectDocumentDto } from './dto/correct-document.dto';
 import { DocumentResponseDto } from './dto/document-response.dto';
 import { FindDocumentsQueryDto } from './dto/find-documents-query.dto';
@@ -57,6 +58,7 @@ export class MedicalDocumentsService {
     private readonly repo: MedicalDocumentsRepository,
     private readonly storage: StorageService,
     private readonly iaClient: IaClientService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async upload(
@@ -148,16 +150,25 @@ export class MedicalDocumentsService {
       );
     }
 
-    await this.repo.updateStatus(id, DocumentStatus.PROCESSING, {
+    const processing = await this.repo.updateStatus(id, DocumentStatus.PROCESSING, {
       ...(userId && { updatedBy: userId }),
     });
 
+    // El OCR puede tardar minutos: se ejecuta en segundo plano y se notifica
+    // al usuario al terminar. La respuesta vuelve de inmediato (PROCESSING).
+    void this.runProcessing(doc, userId);
+
+    return this.toResponse(processing);
+  }
+
+  private async runProcessing(doc: MedicalDocument, userId?: string): Promise<void> {
+    const { id, patientId } = doc;
     try {
       const allowedMime = doc.mimeType as 'image/jpeg' | 'image/png' | 'application/pdf';
       const fileBytes = await this.storage.readFile(doc.storagePath);
-      const result = await this.iaClient.process(doc.id, fileBytes, allowedMime);
+      const result = await this.iaClient.process(id, fileBytes, allowedMime);
 
-      const updated = await this.repo.updateStatus(id, DocumentStatus.PROCESSED, {
+      await this.repo.updateStatus(id, DocumentStatus.PROCESSED, {
         ocrText: result.ocrText,
         nerEntities: result.entities as unknown as Prisma.InputJsonValue,
         ...(result.metrics && {
@@ -169,13 +180,36 @@ export class MedicalDocumentsService {
         ...(userId && { updatedBy: userId }),
       });
 
-      return this.toResponse(updated);
+      if (userId) {
+        await this.notifications.notify({
+          userId,
+          type: 'DOCUMENT_PROCESSED',
+          title: 'Digitalización completada',
+          body: `«${doc.originalName}» ya tiene texto OCR y está listo para corregir.`,
+          patientId,
+          documentId: id,
+        });
+      }
     } catch (err) {
       this.logger.error(`Error procesando documento ${id}: ${String(err)}`);
-      const failed = await this.repo.updateStatus(id, DocumentStatus.FAILED, {
-        ...(userId && { updatedBy: userId }),
-      });
-      return this.toResponse(failed);
+      await this.repo
+        .updateStatus(id, DocumentStatus.FAILED, {
+          ...(userId && { updatedBy: userId }),
+        })
+        .catch((updateErr) =>
+          this.logger.error(`No se pudo marcar FAILED el documento ${id}: ${String(updateErr)}`),
+        );
+
+      if (userId) {
+        await this.notifications.notify({
+          userId,
+          type: 'DOCUMENT_FAILED',
+          title: 'Error en la digitalización',
+          body: `«${doc.originalName}» no pudo procesarse. Puedes reintentar desde el documento.`,
+          patientId,
+          documentId: id,
+        });
+      }
     }
   }
 

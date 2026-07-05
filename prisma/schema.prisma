@@ -83,8 +83,26 @@ model User {
 
   userRoles     UserRole[]
   refreshTokens RefreshToken[]
+  notifications Notification[]
 
   @@map("users")
+}
+
+model Notification {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  type       String
+  title      String
+  body       String?
+  patientId  String?   @map("patient_id") @db.Uuid
+  documentId String?   @map("document_id") @db.Uuid
+  readAt     DateTime? @map("read_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("notifications")
 }
 
 model Role {

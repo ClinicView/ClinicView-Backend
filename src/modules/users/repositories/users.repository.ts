@@ -45,6 +45,27 @@ export class UsersRepository {
     return this.prisma.user.findMany({ orderBy: { createdAt: 'desc' }, ...withRoles });
   }
 
+  /** Búsqueda liviana de profesionales activos para selectores clínicos. */
+  async searchActiveProfessionals(
+    query: string,
+    limit = 8,
+  ): Promise<Array<Pick<User, 'id' | 'fullName' | 'profession'>>> {
+    return this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        ...(query && {
+          OR: [
+            { fullName: { contains: query, mode: 'insensitive' } },
+            { profession: { contains: query, mode: 'insensitive' } },
+          ],
+        }),
+      },
+      select: { id: true, fullName: true, profession: true },
+      orderBy: { fullName: 'asc' },
+      take: limit,
+    });
+  }
+
   async findById(id: string): Promise<UserWithRoles | null> {
     return this.prisma.user.findUnique({ where: { id }, ...withRoles });
   }

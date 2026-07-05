@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -49,6 +50,15 @@ export class UsersController {
   @ApiResponse({ status: 200, type: [UserResponseDto] })
   findAll(): Promise<UserResponseDto[]> {
     return this.usersService.findAll();
+  }
+
+  @Get('professionals')
+  @ApiOperation({
+    summary:
+      'Buscar profesionales activos (nombre/profesión) — para selectores clínicos, sin datos sensibles',
+  })
+  searchProfessionals(@Query('q') q?: string) {
+    return this.usersService.searchProfessionals(q ?? '');
   }
 
   @Get(':id')

@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentStatus } from '@prisma/client';
 import { IaClientService } from '../../../core/ia/ia-client.service';
 import { StorageService } from '../../../core/storage/storage.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { MedicalDocumentsService } from '../medical-documents.service';
 import { MedicalDocumentsRepository } from '../repositories/medical-documents.repository';
 
@@ -67,6 +68,13 @@ const mockIaClient = {
   process: jest.fn(),
 } satisfies Record<keyof IaClientService, jest.Mock>;
 
+const mockNotifications = {
+  notify: jest.fn(),
+  list: jest.fn(),
+  markRead: jest.fn(),
+  markAllRead: jest.fn(),
+};
+
 describe('MedicalDocumentsService', () => {
   let service: MedicalDocumentsService;
 
@@ -77,6 +85,7 @@ describe('MedicalDocumentsService', () => {
         { provide: MedicalDocumentsRepository, useValue: mockRepo },
         { provide: StorageService, useValue: mockStorage },
         { provide: IaClientService, useValue: mockIaClient },
+        { provide: NotificationsService, useValue: mockNotifications },
       ],
     }).compile();
 
@@ -153,26 +162,44 @@ describe('MedicalDocumentsService', () => {
       await expect(service.process('patient-uuid', 'doc-uuid')).rejects.toThrow(ConflictException);
     });
 
-    it('actualiza a PROCESSED cuando el worker IA tiene éxito', async () => {
+    it('devuelve PROCESSING de inmediato y completa a PROCESSED en segundo plano', async () => {
       const doc = makeDoc();
       mockRepo.findByIdAndPatient.mockResolvedValue(doc);
       mockRepo.updateStatus
         .mockResolvedValueOnce({ ...doc, status: DocumentStatus.PROCESSING })
         .mockResolvedValueOnce({ ...doc, status: DocumentStatus.PROCESSED, ocrText: 'texto extraído' });
 
-      mockIaClient.process.mockResolvedValue({ ocrText: 'texto extraído', entities: [] });
+      mockIaClient.process.mockResolvedValue({
+        ocrText: 'texto extraído',
+        entities: [],
+        metrics: null,
+        ocrConfidence: 0.9,
+        confidenceLevel: 'HIGH',
+      });
 
       const result = await service.process('patient-uuid', 'doc-uuid', 'user-uuid');
 
+      // La respuesta HTTP es inmediata, con el documento en PROCESSING.
+      expect(result.status).toBe(DocumentStatus.PROCESSING);
       expect(mockRepo.updateStatus).toHaveBeenCalledWith(
         'doc-uuid',
         DocumentStatus.PROCESSING,
         expect.anything(),
       );
-      expect(result.status).toBe(DocumentStatus.PROCESSED);
+
+      // El trabajo en segundo plano actualiza a PROCESSED y notifica.
+      await new Promise(process.nextTick);
+      expect(mockRepo.updateStatus).toHaveBeenCalledWith(
+        'doc-uuid',
+        DocumentStatus.PROCESSED,
+        expect.objectContaining({ ocrText: 'texto extraído' }),
+      );
+      expect(mockNotifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'DOCUMENT_PROCESSED', userId: 'user-uuid' }),
+      );
     });
 
-    it('actualiza a FAILED cuando el worker de IA falla', async () => {
+    it('marca FAILED y notifica cuando el worker de IA falla', async () => {
       const doc = makeDoc();
       mockRepo.findByIdAndPatient.mockResolvedValue(doc);
       mockRepo.updateStatus
@@ -181,8 +208,18 @@ describe('MedicalDocumentsService', () => {
 
       mockIaClient.process.mockRejectedValue(new Error('IA no disponible'));
 
-      const result = await service.process('patient-uuid', 'doc-uuid');
-      expect(result.status).toBe(DocumentStatus.FAILED);
+      const result = await service.process('patient-uuid', 'doc-uuid', 'user-uuid');
+      expect(result.status).toBe(DocumentStatus.PROCESSING);
+
+      await new Promise(process.nextTick);
+      expect(mockRepo.updateStatus).toHaveBeenCalledWith(
+        'doc-uuid',
+        DocumentStatus.FAILED,
+        expect.anything(),
+      );
+      expect(mockNotifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'DOCUMENT_FAILED', userId: 'user-uuid' }),
+      );
     });
   });
 

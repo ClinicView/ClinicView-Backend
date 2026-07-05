@@ -13,6 +13,7 @@ import { StorageModule } from './core/storage/storage.module';
 import { ClinicalRecordsModule } from './modules/clinical-records/clinical-records.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { MedicalDocumentsModule } from './modules/medical-documents/medical-documents.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PatientsModule } from './modules/patients/patients.module';
 import { ReviewModule } from './modules/review/review.module';
 import { RolesModule } from './modules/roles/roles.module';
@@ -33,6 +34,7 @@ import { UsersModule } from './modules/users/users.module';
     ClinicalRecordsModule,
     DashboardModule,
     MedicalDocumentsModule,
+    NotificationsModule,
     ReviewModule,
   ],
   controllers: [AppController],

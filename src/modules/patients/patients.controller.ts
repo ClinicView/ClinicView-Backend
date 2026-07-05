@@ -56,6 +56,13 @@ export class PatientsController {
     return this.patientsService.findAll(query);
   }
 
+  @Get('stats')
+  @RequirePermissions('patients.read')
+  @ApiOperation({ summary: 'Indicadores de la lista de pacientes (total, activos, nuevos, con documentos)' })
+  stats() {
+    return this.patientsService.stats();
+  }
+
   @Get(':id')
   @RequirePermissions('patients.read')
   @ApiOperation({ summary: 'Obtener paciente por ID' })

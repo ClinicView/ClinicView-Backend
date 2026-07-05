@@ -54,6 +54,7 @@ const mockRepo = {
   saveCorrection: jest.fn(),
   searchByPatient: jest.fn(),
   isPatientActive: jest.fn(),
+  failStaleProcessing: jest.fn(),
 } satisfies Record<keyof MedicalDocumentsRepository, jest.Mock>;
 
 const mockStorage = {

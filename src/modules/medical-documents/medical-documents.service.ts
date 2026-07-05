@@ -7,6 +7,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { DocumentStatus, MedicalDocument, Prisma } from '@prisma/client';
 import { IaClientService } from '../../core/ia/ia-client.service';
@@ -51,7 +52,7 @@ function buildSnippet(text: string | null, keyword: string): string | null {
 }
 
 @Injectable()
-export class MedicalDocumentsService {
+export class MedicalDocumentsService implements OnModuleInit {
   private readonly logger = new Logger(MedicalDocumentsService.name);
 
   constructor(
@@ -60,6 +61,24 @@ export class MedicalDocumentsService {
     private readonly iaClient: IaClientService,
     private readonly notifications: NotificationsService,
   ) {}
+
+  /**
+   * Recuperación tras reinicio: los documentos que quedaron en PROCESSING
+   * pertenecen a un OCR que murió con el proceso anterior — se marcan FAILED
+   * para que puedan reintentarse desde la interfaz.
+   */
+  async onModuleInit(): Promise<void> {
+    try {
+      const recovered = await this.repo.failStaleProcessing();
+      if (recovered > 0) {
+        this.logger.warn(
+          `${recovered} documento(s) quedaron en PROCESSING tras un reinicio — marcados FAILED para reintento.`,
+        );
+      }
+    } catch (err) {
+      this.logger.error(`No se pudo recuperar documentos PROCESSING: ${String(err)}`);
+    }
+  }
 
   async upload(
     patientId: string,

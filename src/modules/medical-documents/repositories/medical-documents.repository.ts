@@ -60,6 +60,18 @@ export class MedicalDocumentsRepository {
     return this.prisma.medicalDocument.findFirst({ where: { id, patientId } });
   }
 
+  /**
+   * Marca como FAILED los documentos que quedaron en PROCESSING tras un
+   * reinicio del servidor (el OCR en segundo plano murió con el proceso).
+   */
+  async failStaleProcessing(): Promise<number> {
+    const result = await this.prisma.medicalDocument.updateMany({
+      where: { status: DocumentStatus.PROCESSING },
+      data: { status: DocumentStatus.FAILED },
+    });
+    return result.count;
+  }
+
   async isPatientActive(patientId: string): Promise<boolean> {
     const patient = await this.prisma.patient.findUnique({
       where: { id: patientId },

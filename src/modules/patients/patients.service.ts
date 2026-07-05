@@ -89,6 +89,13 @@ export class PatientsService {
     return this.toResponse(patient);
   }
 
+  async activate(id: string): Promise<PatientResponseDto> {
+    const existing = await this.patientsRepository.findById(id);
+    if (!existing) throw new NotFoundException('Paciente no encontrado.');
+    const patient = await this.patientsRepository.activate(id);
+    return this.toResponse(patient);
+  }
+
   private toResponse(patient: Patient): PatientResponseDto {
     return {
       id: patient.id,

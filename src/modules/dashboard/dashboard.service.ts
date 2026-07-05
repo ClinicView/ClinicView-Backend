@@ -62,17 +62,28 @@ export class DashboardService {
         where: { createdAt: { gte: yesterdayStart, lt: todayStart } },
       }),
       this.prisma.medicalDocument.count({
-        where: { status: { in: [DocumentStatus.PENDING, DocumentStatus.PROCESSING] } },
+        where: {
+          status: { in: [DocumentStatus.PENDING, DocumentStatus.PROCESSING] },
+          patient: { isActive: true },
+        },
       }),
-      this.prisma.medicalDocument.count({ where: { status: DocumentStatus.PROCESSED } }),
       this.prisma.medicalDocument.count({
-        where: { processedAt: { gte: todayStart } },
+        where: { status: DocumentStatus.PROCESSED, patient: { isActive: true } },
       }),
       this.prisma.medicalDocument.count({
-        where: { processedAt: { gte: yesterdayStart, lt: todayStart } },
+        where: { processedAt: { gte: todayStart }, patient: { isActive: true } },
       }),
-      this.prisma.medicalDocument.count({ where: { status: DocumentStatus.FAILED } }),
+      this.prisma.medicalDocument.count({
+        where: {
+          processedAt: { gte: yesterdayStart, lt: todayStart },
+          patient: { isActive: true },
+        },
+      }),
+      this.prisma.medicalDocument.count({
+        where: { status: DocumentStatus.FAILED, patient: { isActive: true } },
+      }),
       this.prisma.medicalDocument.findMany({
+        where: { patient: { isActive: true } },
         orderBy: { updatedAt: 'desc' },
         take: RECENT_ACTIVITY_LIMIT,
         include: {

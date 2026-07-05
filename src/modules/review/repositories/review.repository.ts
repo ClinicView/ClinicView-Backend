@@ -21,18 +21,21 @@ export class ReviewRepository {
 
   async findQueue(filters: ReviewQueueFilters) {
     const skip = (filters.page - 1) * filters.limit;
+    // Los documentos de pacientes desactivados no entran a la cola de trabajo.
+    const where = {
+      status: DocumentStatus.PROCESSED,
+      patient: { isActive: true },
+    };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.medicalDocument.findMany({
-        where: { status: DocumentStatus.PROCESSED },
+        where,
         include: { patient: { select: patientSelect } },
         orderBy: { processedAt: 'asc' },
         skip,
         take: filters.limit,
       }),
-      this.prisma.medicalDocument.count({
-        where: { status: DocumentStatus.PROCESSED },
-      }),
+      this.prisma.medicalDocument.count({ where }),
     ]);
 
     return { items, total };

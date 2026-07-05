@@ -52,6 +52,7 @@ const mockRepo = {
   updateStatus: jest.fn(),
   saveCorrection: jest.fn(),
   searchByPatient: jest.fn(),
+  isPatientActive: jest.fn(),
 } satisfies Record<keyof MedicalDocumentsRepository, jest.Mock>;
 
 const mockStorage = {
@@ -81,6 +82,8 @@ describe('MedicalDocumentsService', () => {
 
     service = module.get(MedicalDocumentsService);
     jest.clearAllMocks();
+    // Por defecto el paciente está activo; los tests de inactivo lo sobreescriben.
+    mockRepo.isPatientActive.mockResolvedValue(true);
   });
 
   describe('upload', () => {

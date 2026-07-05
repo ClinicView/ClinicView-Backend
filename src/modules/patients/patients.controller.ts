@@ -86,4 +86,14 @@ export class PatientsController {
   deactivate(@Param('id', ParseUUIDPipe) id: string): Promise<PatientResponseDto> {
     return this.patientsService.deactivate(id);
   }
+
+  @Patch(':id/activate')
+  @RequirePermissions('patients.update')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reactivar paciente desactivado' })
+  @ApiResponse({ status: 200, type: PatientResponseDto })
+  @ApiNotFoundResponse({ description: 'Paciente no encontrado.' })
+  activate(@Param('id', ParseUUIDPipe) id: string): Promise<PatientResponseDto> {
+    return this.patientsService.activate(id);
+  }
 }

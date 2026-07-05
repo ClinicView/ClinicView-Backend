@@ -68,6 +68,12 @@ export class MedicalDocumentsService {
       throw new BadRequestException('Archivo requerido.');
     }
 
+    if (!(await this.repo.isPatientActive(patientId))) {
+      throw new ConflictException(
+        'El paciente está desactivado. Reactívalo antes de subir nuevos documentos.',
+      );
+    }
+
     const maxSizeBytes = getUploadMaxSizeBytes();
     if (file.size > maxSizeBytes) {
       throw new ConflictException(
@@ -131,6 +137,11 @@ export class MedicalDocumentsService {
   async process(patientId: string, id: string, userId?: string): Promise<DocumentResponseDto> {
     const doc = await this.repo.findByIdAndPatient(id, patientId);
     if (!doc) throw new NotFoundException('Documento no encontrado.');
+    if (!(await this.repo.isPatientActive(patientId))) {
+      throw new ConflictException(
+        'El paciente está desactivado. Reactívalo antes de procesar documentos.',
+      );
+    }
     if (doc.status !== DocumentStatus.PENDING && doc.status !== DocumentStatus.FAILED) {
       throw new ConflictException(
         `No se puede procesar un documento con estado ${doc.status}.`,

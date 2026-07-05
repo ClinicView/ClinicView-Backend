@@ -60,6 +60,14 @@ export class MedicalDocumentsRepository {
     return this.prisma.medicalDocument.findFirst({ where: { id, patientId } });
   }
 
+  async isPatientActive(patientId: string): Promise<boolean> {
+    const patient = await this.prisma.patient.findUnique({
+      where: { id: patientId },
+      select: { isActive: true },
+    });
+    return patient?.isActive ?? false;
+  }
+
   /** Búsqueda por palabra clave en el texto OCR/corregido del paciente. */
   async searchByPatient(
     patientId: string,

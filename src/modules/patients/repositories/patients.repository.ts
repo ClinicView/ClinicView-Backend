@@ -58,6 +58,10 @@ export class PatientsRepository {
     return this.prisma.patient.update({ where: { id }, data: { isActive: false } });
   }
 
+  async activate(id: string): Promise<Patient> {
+    return this.prisma.patient.update({ where: { id }, data: { isActive: true } });
+  }
+
   private buildWhere(options: FindManyOptions): Prisma.PatientWhereInput {
     const conditions: Prisma.PatientWhereInput[] = [{ isActive: true }];
 

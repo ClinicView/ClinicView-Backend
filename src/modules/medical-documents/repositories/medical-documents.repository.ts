@@ -29,20 +29,27 @@ export interface SaveCorrectionData {
   correctedText?: string | null;
   correctedEntities?: Prisma.InputJsonValue | typeof Prisma.JsonNull;
   correctedAt: Date;
-  correctedById?: string | null;
-  updatedBy?: string | null;
+  correctedById: string;
+  updatedBy: string;
 }
 
 export interface ValidateWithCorrectionData {
   correctedText: string;
   correctedEntities: Prisma.InputJsonValue;
-  correctedAt: Date;
+  correctedAt?: Date;
   correctedById?: string | null;
   reviewedAt: Date;
-  reviewedBy?: string | null;
+  reviewedBy: string;
   validationChecklist: Prisma.InputJsonValue;
   validationAttestedAt: Date;
-  updatedBy?: string | null;
+  updatedBy: string;
+}
+
+export interface RejectDocumentData {
+  rejectReason: string;
+  reviewedAt: Date;
+  reviewedBy: string;
+  updatedBy: string;
 }
 
 @Injectable()
@@ -185,6 +192,34 @@ export class MedicalDocumentsRepository {
           ...data,
           status: DocumentStatus.VALIDATED,
           validationAttested: true,
+          version: { increment: 1 },
+        },
+      });
+      if (result.count !== 1) return null;
+      return tx.medicalDocument.findUnique({ where: { id } });
+    });
+  }
+
+  async rejectReviewedVersion(
+    id: string,
+    patientId: string,
+    expectedVersion: number,
+    data: RejectDocumentData,
+  ): Promise<MedicalDocument | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const result = await tx.medicalDocument.updateMany({
+        where: {
+          id,
+          patientId,
+          status: { in: [DocumentStatus.PENDING, DocumentStatus.PROCESSED] },
+          version: expectedVersion,
+        },
+        data: {
+          ...data,
+          status: DocumentStatus.REJECTED,
+          validationChecklist: Prisma.DbNull,
+          validationAttested: false,
+          validationAttestedAt: null,
           version: { increment: 1 },
         },
       });

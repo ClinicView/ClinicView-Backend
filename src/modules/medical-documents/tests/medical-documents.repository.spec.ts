@@ -1,4 +1,4 @@
-import { DocumentStatus, MedicalDocument } from '@prisma/client';
+import { DocumentStatus, MedicalDocument, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
 import { MedicalDocumentsRepository } from '../repositories/medical-documents.repository';
 
@@ -73,12 +73,121 @@ describe('MedicalDocumentsRepository', () => {
         correctedEntities: [],
         correctedAt: new Date(),
         reviewedAt: new Date(),
+        reviewedBy: 'reviewer-uuid',
         validationChecklist: ['text', 'entities', 'sections', 'phi'],
         validationAttestedAt: new Date(),
+        updatedBy: 'reviewer-uuid',
       },
     );
 
     expect(result).toBeNull();
     expect(findUnique).not.toHaveBeenCalled();
+  });
+
+  it('rechaza solo la versión revisada y limpia cualquier atestación previa', async () => {
+    const rejected = { id: 'doc-uuid', status: DocumentStatus.REJECTED } as MedicalDocument;
+    updateMany.mockResolvedValue({ count: 1 });
+    findUnique.mockResolvedValue(rejected);
+
+    const result = await repository.rejectReviewedVersion(
+      'doc-uuid',
+      'patient-uuid',
+      4,
+      {
+        rejectReason: 'Documento ilegible por baja resolución.',
+        reviewedAt: new Date('2026-09-02T10:00:00.000Z'),
+        reviewedBy: 'reviewer-uuid',
+        updatedBy: 'reviewer-uuid',
+      },
+    );
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'doc-uuid',
+        patientId: 'patient-uuid',
+        status: { in: [DocumentStatus.PENDING, DocumentStatus.PROCESSED] },
+        version: 4,
+      },
+      data: expect.objectContaining({
+        status: DocumentStatus.REJECTED,
+        validationChecklist: Prisma.DbNull,
+        validationAttested: false,
+        validationAttestedAt: null,
+        version: { increment: 1 },
+      }),
+    });
+    expect(result).toBe(rejected);
+  });
+
+  it('permite que solo una operación gane entre validar y rechazar la misma versión', async () => {
+    const row: Record<string, unknown> = {
+      id: 'doc-uuid',
+      patientId: 'patient-uuid',
+      status: DocumentStatus.PROCESSED,
+      version: 4,
+      validationChecklist: null,
+      validationAttested: false,
+      validationAttestedAt: null,
+    };
+
+    updateMany.mockImplementation(async ({ where, data }) => {
+      await Promise.resolve();
+      const statusFilter = where.status as
+        | DocumentStatus
+        | { in: DocumentStatus[] };
+      const statusMatches =
+        typeof statusFilter === 'string'
+          ? row.status === statusFilter
+          : statusFilter.in.includes(row.status as DocumentStatus);
+      if (
+        row.id !== where.id ||
+        row.patientId !== where.patientId ||
+        row.version !== where.version ||
+        !statusMatches
+      ) {
+        return { count: 0 };
+      }
+
+      const { version, validationChecklist, ...changes } = data;
+      Object.assign(row, changes, {
+        validationChecklist:
+          validationChecklist === Prisma.DbNull ? null : validationChecklist,
+        version: (row.version as number) + version.increment,
+      });
+      return { count: 1 };
+    });
+    findUnique.mockImplementation(async () => row as unknown as MedicalDocument);
+
+    const [validationResult, rejectionResult] = await Promise.all([
+      repository.validateWithCorrection('doc-uuid', 'patient-uuid', 4, {
+        correctedText: 'Texto final',
+        correctedEntities: [],
+        reviewedAt: new Date('2026-09-02T10:00:00.000Z'),
+        reviewedBy: 'validator-uuid',
+        validationChecklist: {
+          schemaVersion: 1,
+          locale: 'es-PE',
+          items: [],
+        },
+        validationAttestedAt: new Date('2026-09-02T10:00:00.000Z'),
+        updatedBy: 'validator-uuid',
+      }),
+      repository.rejectReviewedVersion('doc-uuid', 'patient-uuid', 4, {
+        rejectReason: 'Documento ilegible por baja resolución.',
+        reviewedAt: new Date('2026-09-02T10:00:00.000Z'),
+        reviewedBy: 'rejector-uuid',
+        updatedBy: 'rejector-uuid',
+      }),
+    ]);
+
+    expect([validationResult, rejectionResult].filter(Boolean)).toHaveLength(1);
+    expect(row.version).toBe(5);
+    expect([DocumentStatus.VALIDATED, DocumentStatus.REJECTED]).toContain(row.status);
+    if (row.status === DocumentStatus.VALIDATED) {
+      expect(row.validationAttested).toBe(true);
+    } else {
+      expect(row.validationAttested).toBe(false);
+      expect(row.validationChecklist).toBeNull();
+    }
   });
 });

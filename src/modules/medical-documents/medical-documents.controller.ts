@@ -42,7 +42,7 @@ import { ValidateDocumentDto } from './dto/validate-document.dto';
 const DEFAULT_UPLOAD_MAX_SIZE_MB = 20;
 
 interface AuthRequest {
-  user?: { sub?: string };
+  user: { sub: string };
 }
 
 function getUploadMaxSizeBytes(): number {
@@ -85,7 +85,7 @@ export class MedicalDocumentsController {
     @UploadedFile() file: Express.Multer.File,
     @Request() req: AuthRequest,
   ): Promise<DocumentResponseDto> {
-    return this.service.upload(patientId, file, req.user?.sub);
+    return this.service.upload(patientId, file, req.user.sub);
   }
 
   @Get()
@@ -153,7 +153,7 @@ export class MedicalDocumentsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Request() req: AuthRequest,
   ): Promise<DocumentResponseDto> {
-    return this.service.process(patientId, id, req.user?.sub);
+    return this.service.process(patientId, id, req.user.sub);
   }
 
   @Patch(':id/validate')
@@ -173,7 +173,7 @@ export class MedicalDocumentsController {
     @Body() dto: ValidateDocumentDto,
     @Request() req: AuthRequest,
   ): Promise<DocumentResponseDto> {
-    return this.service.validate(patientId, id, dto, req.user?.sub);
+    return this.service.validate(patientId, id, dto, req.user.sub);
   }
 
   @Patch(':id/correction')
@@ -183,13 +183,17 @@ export class MedicalDocumentsController {
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, type: DocumentResponseDto })
+  @ApiResponse({
+    status: 409,
+    description: 'El estado o la versión cambiaron durante la corrección.',
+  })
   saveCorrection(
     @Param('patientId', ParseUUIDPipe) patientId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CorrectDocumentDto,
     @Request() req: AuthRequest,
   ): Promise<DocumentResponseDto> {
-    return this.service.saveCorrection(patientId, id, dto, req.user?.sub);
+    return this.service.saveCorrection(patientId, id, dto, req.user.sub);
   }
 
   @Patch(':id/reject')
@@ -199,13 +203,17 @@ export class MedicalDocumentsController {
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, type: DocumentResponseDto })
+  @ApiResponse({
+    status: 409,
+    description: 'El estado o la versión cambiaron durante la revisión.',
+  })
   reject(
     @Param('patientId', ParseUUIDPipe) patientId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RejectDocumentDto,
     @Request() req: AuthRequest,
   ): Promise<DocumentResponseDto> {
-    return this.service.reject(patientId, id, dto, req.user?.sub);
+    return this.service.reject(patientId, id, dto, req.user.sub);
   }
 }
 

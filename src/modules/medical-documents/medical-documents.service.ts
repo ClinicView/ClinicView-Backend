@@ -8,6 +8,7 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { DocumentStatus, MedicalDocument, Prisma } from '@prisma/client';
 import { IaClientService } from '../../core/ia/ia-client.service';
@@ -18,8 +19,10 @@ import { DocumentResponseDto } from './dto/document-response.dto';
 import { FindDocumentsQueryDto } from './dto/find-documents-query.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
 import {
+  createValidationChecklistSnapshot,
   REQUIRED_VALIDATION_CHECKLIST,
   ValidateDocumentDto,
+  ValidationChecklistSnapshotDto,
 } from './dto/validate-document.dto';
 import { MedicalDocumentsRepository } from './repositories/medical-documents.repository';
 
@@ -53,6 +56,33 @@ function normalizeCorrectedEntities(
       normalizedValue: entity.normalizedValue?.trim() || null,
     }))
     .filter((entity) => entity.value.length > 0);
+}
+
+function normalizeStoredEntities(
+  entities: unknown,
+): Array<{ type: string; value: string; normalizedValue: string | null }> {
+  if (!Array.isArray(entities)) return [];
+
+  return entities.flatMap((entity) => {
+    if (!entity || typeof entity !== 'object' || Array.isArray(entity)) return [];
+    const candidate = entity as Record<string, unknown>;
+    if (typeof candidate.type !== 'string' || typeof candidate.value !== 'string') return [];
+
+    return [{
+      type: candidate.type,
+      value: candidate.value.trim(),
+      normalizedValue:
+        typeof candidate.normalizedValue === 'string'
+          ? candidate.normalizedValue.trim() || null
+          : null,
+    }];
+  });
+}
+
+function requireAuthenticatedActor(userId: string): void {
+  if (!userId) {
+    throw new UnauthorizedException('No se pudo identificar al usuario autenticado.');
+  }
 }
 
 /** Extrae un fragmento del texto alrededor de la primera coincidencia. */
@@ -252,8 +282,9 @@ export class MedicalDocumentsService implements OnModuleInit {
     patientId: string,
     id: string,
     dto: ValidateDocumentDto,
-    userId?: string,
+    userId: string,
   ): Promise<DocumentResponseDto> {
+    requireAuthenticatedActor(userId);
     const doc = await this.repo.findByIdAndPatient(id, patientId);
     if (!doc) throw new NotFoundException('Documento no encontrado.');
     if (doc.status !== DocumentStatus.PROCESSED) {
@@ -277,6 +308,15 @@ export class MedicalDocumentsService implements OnModuleInit {
       );
     }
 
+    const normalizedEntities = normalizeCorrectedEntities(dto.correctedEntities);
+    const savedText = (doc.correctedText ?? doc.ocrText ?? '').trim();
+    const savedEntities = normalizeStoredEntities(
+      doc.correctedEntities ?? doc.nerEntities,
+    );
+    const contentChanged =
+      correctedText !== savedText ||
+      JSON.stringify(normalizedEntities) !== JSON.stringify(savedEntities);
+
     const now = new Date();
     const updated = await this.repo.validateWithCorrection(
       id,
@@ -284,16 +324,17 @@ export class MedicalDocumentsService implements OnModuleInit {
       dto.expectedVersion,
       {
         correctedText,
-        correctedEntities: normalizeCorrectedEntities(dto.correctedEntities) as unknown as Prisma.InputJsonValue,
-        correctedAt: now,
-        reviewedAt: now,
-        validationChecklist: [...REQUIRED_VALIDATION_CHECKLIST] as unknown as Prisma.InputJsonValue,
-        validationAttestedAt: now,
-        ...(userId && {
+        correctedEntities: normalizedEntities as unknown as Prisma.InputJsonValue,
+        ...(contentChanged && {
+          correctedAt: now,
           correctedById: userId,
-          reviewedBy: userId,
-          updatedBy: userId,
         }),
+        reviewedAt: now,
+        reviewedBy: userId,
+        validationChecklist:
+          createValidationChecklistSnapshot() as unknown as Prisma.InputJsonValue,
+        validationAttestedAt: now,
+        updatedBy: userId,
       },
     );
     if (!updated) {
@@ -308,8 +349,9 @@ export class MedicalDocumentsService implements OnModuleInit {
     patientId: string,
     id: string,
     dto: CorrectDocumentDto,
-    userId?: string,
+    userId: string,
   ): Promise<DocumentResponseDto> {
+    requireAuthenticatedActor(userId);
     const doc = await this.repo.findByIdAndPatient(id, patientId);
     if (!doc) throw new NotFoundException('Documento no encontrado.');
     if (doc.status !== DocumentStatus.PROCESSED) {
@@ -330,7 +372,8 @@ export class MedicalDocumentsService implements OnModuleInit {
         correctedEntities: normalizeCorrectedEntities(dto.correctedEntities) as unknown as Prisma.InputJsonValue,
       }),
       correctedAt: new Date(),
-      ...(userId && { correctedById: userId, updatedBy: userId }),
+      correctedById: userId,
+      updatedBy: userId,
     });
 
     if (!updated) {
@@ -346,8 +389,9 @@ export class MedicalDocumentsService implements OnModuleInit {
     patientId: string,
     id: string,
     dto: RejectDocumentDto,
-    userId?: string,
+    userId: string,
   ): Promise<DocumentResponseDto> {
+    requireAuthenticatedActor(userId);
     const doc = await this.repo.findByIdAndPatient(id, patientId);
     if (!doc) throw new NotFoundException('Documento no encontrado.');
     if (
@@ -358,11 +402,26 @@ export class MedicalDocumentsService implements OnModuleInit {
         `No se puede rechazar un documento con estado ${doc.status}.`,
       );
     }
-    const updated = await this.repo.updateStatus(id, DocumentStatus.REJECTED, {
-      rejectReason: dto.reason,
-      reviewedAt: new Date(),
-      ...(userId && { reviewedBy: userId, updatedBy: userId }),
-    });
+    const rejectReason = dto.reason.trim();
+    if (rejectReason.length < 10) {
+      throw new BadRequestException('El motivo del rechazo debe tener al menos 10 caracteres.');
+    }
+    const updated = await this.repo.rejectReviewedVersion(
+      id,
+      patientId,
+      dto.expectedVersion,
+      {
+        rejectReason,
+        reviewedAt: new Date(),
+        reviewedBy: userId,
+        updatedBy: userId,
+      },
+    );
+    if (!updated) {
+      throw new ConflictException(
+        'El documento cambió mientras lo revisabas. Recarga la versión actual antes de rechazar.',
+      );
+    }
     return this.toResponse(updated);
   }
 
@@ -417,7 +476,8 @@ export class MedicalDocumentsService implements OnModuleInit {
       processedAt: doc.processedAt,
       reviewedAt: doc.reviewedAt,
       reviewedBy: doc.reviewedBy,
-      validationChecklist: doc.validationChecklist,
+      validationChecklist:
+        doc.validationChecklist as unknown as ValidationChecklistSnapshotDto | null,
       validationAttested: doc.validationAttested,
       validationAttestedAt: doc.validationAttestedAt,
       updatedAt: doc.updatedAt,

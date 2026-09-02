@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DocumentStatus } from '@prisma/client';
+import { ValidationChecklistSnapshotDto } from './validate-document.dto';
 
 export class DocumentResponseDto {
   @ApiProperty() id: string;
@@ -74,10 +75,10 @@ export class DocumentResponseDto {
   @ApiPropertyOptional({ type: String, nullable: true }) reviewedBy: string | null;
   @ApiPropertyOptional({
     nullable: true,
-    type: 'array',
-    items: { type: 'string', enum: ['text', 'entities', 'sections', 'phi'] },
+    type: ValidationChecklistSnapshotDto,
+    description: 'Copia versionada de las afirmaciones aceptadas al validar.',
   })
-  validationChecklist: unknown;
+  validationChecklist: ValidationChecklistSnapshotDto | null;
   @ApiProperty() validationAttested: boolean;
   @ApiPropertyOptional({ type: String, nullable: true }) validationAttestedAt: Date | null;
   @ApiProperty() updatedAt: Date;

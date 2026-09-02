@@ -152,13 +152,13 @@ describe('MedicalDocumentsController', () => {
     const result = await controller.reject(
       'patient-uuid',
       'doc-uuid',
-      { reason: 'Documento ilegible por mala calidad.' },
+      { expectedVersion: 0, reason: 'Documento ilegible por mala calidad.' },
       req,
     );
     expect(mockService.reject).toHaveBeenCalledWith(
       'patient-uuid',
       'doc-uuid',
-      { reason: 'Documento ilegible por mala calidad.' },
+      { expectedVersion: 0, reason: 'Documento ilegible por mala calidad.' },
       'user-uuid',
     );
     expect(result.status).toBe(DocumentStatus.REJECTED);

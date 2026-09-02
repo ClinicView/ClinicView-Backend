@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentStatus } from '@prisma/client';
 import { IaClientService } from '../../../core/ia/ia-client.service';
@@ -56,6 +56,7 @@ const mockRepo = {
   updateStatus: jest.fn(),
   saveCorrection: jest.fn(),
   validateWithCorrection: jest.fn(),
+  rejectReviewedVersion: jest.fn(),
   searchByPatient: jest.fn(),
   isPatientActive: jest.fn(),
   failStaleProcessing: jest.fn(),
@@ -268,8 +269,18 @@ describe('MedicalDocumentsService', () => {
           correctedEntities: [
             { type: 'DIAGNOSIS', value: 'Hipertensión', normalizedValue: 'HTA' },
           ],
+          correctedById: 'user-uuid',
           reviewedBy: 'user-uuid',
-          validationChecklist: ['text', 'entities', 'sections', 'phi'],
+          validationChecklist: expect.objectContaining({
+            schemaVersion: 1,
+            locale: 'es-PE',
+            items: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'text',
+                title: 'Texto corregido y revisado',
+              }),
+            ]),
+          }),
         }),
       );
       expect(result.status).toBe(DocumentStatus.VALIDATED);
@@ -279,7 +290,7 @@ describe('MedicalDocumentsService', () => {
     it('lanza ConflictException si el estado no es PROCESSED', async () => {
       mockRepo.findByIdAndPatient.mockResolvedValue(makeDoc({ status: DocumentStatus.PENDING }));
       await expect(
-        service.validate('patient-uuid', 'doc-uuid', validationDto),
+        service.validate('patient-uuid', 'doc-uuid', validationDto, 'user-uuid'),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -303,9 +314,50 @@ describe('MedicalDocumentsService', () => {
         service.validate('patient-uuid', 'doc-uuid', {
           ...validationDto,
           checklistItems: ['text', 'entities'],
-        }),
+        }, 'user-uuid'),
       ).rejects.toThrow('Debe confirmar todos los puntos');
       expect(mockRepo.validateWithCorrection).not.toHaveBeenCalled();
+    });
+
+    it('preserva la autoría de corrección si el contenido final no cambió', async () => {
+      mockRepo.findByIdAndPatient.mockResolvedValue(
+        makeDoc({
+          status: DocumentStatus.PROCESSED,
+          correctedText: 'texto final revisado',
+          correctedEntities: [
+            { type: 'DIAGNOSIS', value: 'Hipertensión', normalizedValue: 'HTA' },
+          ],
+          correctedAt: new Date('2026-09-01T10:00:00.000Z'),
+          correctedById: 'original-corrector',
+        }),
+      );
+      mockRepo.validateWithCorrection.mockResolvedValue(
+        makeDoc({ status: DocumentStatus.VALIDATED }),
+      );
+
+      await service.validate(
+        'patient-uuid',
+        'doc-uuid',
+        validationDto,
+        'validator-user',
+      );
+
+      const validationData = mockRepo.validateWithCorrection.mock.calls[0][3];
+      expect(validationData).not.toHaveProperty('correctedAt');
+      expect(validationData).not.toHaveProperty('correctedById');
+      expect(validationData).toEqual(
+        expect.objectContaining({
+          reviewedBy: 'validator-user',
+          updatedBy: 'validator-user',
+        }),
+      );
+    });
+
+    it('exige un actor autenticado para validar', async () => {
+      await expect(
+        service.validate('patient-uuid', 'doc-uuid', validationDto, ''),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(mockRepo.findByIdAndPatient).not.toHaveBeenCalled();
     });
   });
 
@@ -357,7 +409,7 @@ describe('MedicalDocumentsService', () => {
         service.saveCorrection('patient-uuid', 'doc-uuid', {
           expectedVersion: 0,
           correctedText: 'texto',
-        }),
+        }, 'user-uuid'),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -371,8 +423,19 @@ describe('MedicalDocumentsService', () => {
         service.saveCorrection('patient-uuid', 'doc-uuid', {
           expectedVersion: 0,
           correctedText: 'texto',
-        }),
+        }, 'user-uuid'),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('exige un actor autenticado para guardar una corrección', async () => {
+      await expect(
+        service.saveCorrection(
+          'patient-uuid',
+          'doc-uuid',
+          { expectedVersion: 0, correctedText: 'texto' },
+          '',
+        ),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 
@@ -381,13 +444,23 @@ describe('MedicalDocumentsService', () => {
       const doc = makeDoc({ status: DocumentStatus.PROCESSED });
       const rejected = makeDoc({ status: DocumentStatus.REJECTED, rejectReason: 'Documento ilegible por baja resolución.' });
       mockRepo.findByIdAndPatient.mockResolvedValue(doc);
-      mockRepo.updateStatus.mockResolvedValue(rejected);
+      mockRepo.rejectReviewedVersion.mockResolvedValue(rejected);
 
       const result = await service.reject(
         'patient-uuid',
         'doc-uuid',
-        { reason: 'Documento ilegible por baja resolución.' },
+        { expectedVersion: 0, reason: 'Documento ilegible por baja resolución.' },
         'user-uuid',
+      );
+      expect(mockRepo.rejectReviewedVersion).toHaveBeenCalledWith(
+        'doc-uuid',
+        'patient-uuid',
+        0,
+        expect.objectContaining({
+          rejectReason: 'Documento ilegible por baja resolución.',
+          reviewedBy: 'user-uuid',
+          updatedBy: 'user-uuid',
+        }),
       );
       expect(result.status).toBe(DocumentStatus.REJECTED);
       expect(result.rejectReason).toBe('Documento ilegible por baja resolución.');
@@ -396,8 +469,56 @@ describe('MedicalDocumentsService', () => {
     it('lanza ConflictException si el estado no es PROCESSED ni PENDING', async () => {
       mockRepo.findByIdAndPatient.mockResolvedValue(makeDoc({ status: DocumentStatus.VALIDATED }));
       await expect(
-        service.reject('patient-uuid', 'doc-uuid', { reason: 'Motivo de rechazo largo.' }),
+        service.reject(
+          'patient-uuid',
+          'doc-uuid',
+          { expectedVersion: 0, reason: 'Motivo de rechazo largo.' },
+          'user-uuid',
+        ),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('responde 409 si la versión cambia antes de rechazar', async () => {
+      mockRepo.findByIdAndPatient.mockResolvedValue(
+        makeDoc({ status: DocumentStatus.PROCESSED, version: 0 }),
+      );
+      mockRepo.rejectReviewedVersion.mockResolvedValue(null);
+
+      await expect(
+        service.reject(
+          'patient-uuid',
+          'doc-uuid',
+          { expectedVersion: 0, reason: 'Documento ilegible por baja resolución.' },
+          'user-uuid',
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('rechaza motivos compuestos solo por espacios', async () => {
+      mockRepo.findByIdAndPatient.mockResolvedValue(
+        makeDoc({ status: DocumentStatus.PROCESSED, version: 0 }),
+      );
+
+      await expect(
+        service.reject(
+          'patient-uuid',
+          'doc-uuid',
+          { expectedVersion: 0, reason: '            ' },
+          'user-uuid',
+        ),
+      ).rejects.toThrow('al menos 10 caracteres');
+      expect(mockRepo.rejectReviewedVersion).not.toHaveBeenCalled();
+    });
+
+    it('exige un actor autenticado para rechazar', async () => {
+      await expect(
+        service.reject(
+          'patient-uuid',
+          'doc-uuid',
+          { expectedVersion: 0, reason: 'Documento ilegible por baja resolución.' },
+          '',
+        ),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 });

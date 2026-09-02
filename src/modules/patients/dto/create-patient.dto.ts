@@ -7,6 +7,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
 } from 'class-validator';
 
@@ -34,7 +35,10 @@ export class CreatePatientDto {
   lastName: string;
 
   @ApiProperty({ example: '1985-06-15', description: 'Fecha en formato YYYY-MM-DD' })
-  @IsDateString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'dateOfBirth debe usar exactamente el formato YYYY-MM-DD.',
+  })
+  @IsDateString({ strict: true, strictSeparator: true })
   dateOfBirth: string;
 
   @ApiProperty({ enum: Sex, example: Sex.F })

@@ -3,6 +3,7 @@ import {
   IsEnum,
   IsIn,
   IsISO8601,
+  Matches,
   IsOptional,
   IsString,
   MaxLength,
@@ -23,8 +24,14 @@ export class CreateRecordDto {
   @IsEnum(RecordOrigin)
   origin?: RecordOrigin;
 
-  @ApiProperty({ description: 'Fecha y hora de la atención (ISO 8601)' })
-  @IsISO8601()
+  @ApiProperty({
+    description: 'Fecha y hora de la atención como instante ISO 8601 con zona horaria',
+    example: '2026-09-02T09:30:00-05:00',
+  })
+  @IsISO8601({ strict: true, strictSeparator: true })
+  @Matches(/(?:Z|[+-]\d{2}:\d{2})$/, {
+    message: 'attendedAt debe incluir una zona horaria explícita (Z o ±HH:MM).',
+  })
   attendedAt: string;
 
   @ApiProperty({ maxLength: 2000 })

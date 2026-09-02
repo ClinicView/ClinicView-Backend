@@ -14,6 +14,7 @@ import {
 import {
   ApiBearerAuth,
   ApiConflictResponse,
+  ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOperation,
   ApiResponse,
@@ -23,6 +24,7 @@ import { PermissionsGuard } from '../../core/rbac/permissions.guard';
 import { RequirePermissions } from '../../core/rbac/requires-permissions.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreatePatientDto } from './dto/create-patient.dto';
+import { ClinicalHistoryExportResponseDto } from './dto/clinical-history-export-response.dto';
 import { FindPatientsQueryDto } from './dto/find-patients-query.dto';
 import { PatientResponseDto } from './dto/patient-response.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
@@ -61,6 +63,24 @@ export class PatientsController {
   @ApiOperation({ summary: 'Indicadores de la lista de pacientes (total, activos, nuevos, con documentos)' })
   stats() {
     return this.patientsService.stats();
+  }
+
+  @Get(':id/clinical-history/export')
+  @RequirePermissions('patients.read', 'records.read', 'documents.read')
+  @ApiOperation({
+    summary: 'Obtener la historia clínica completa para exportación',
+    description:
+      'Devuelve todos los registros, incluidos corregidos y anulados, y todos los documentos con su estado. El texto de documentos no validados se omite.',
+  })
+  @ApiResponse({ status: 200, type: ClinicalHistoryExportResponseDto })
+  @ApiForbiddenResponse({
+    description: 'Requiere patients.read, records.read y documents.read.',
+  })
+  @ApiNotFoundResponse({ description: 'Paciente no encontrado.' })
+  exportClinicalHistory(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<ClinicalHistoryExportResponseDto> {
+    return this.patientsService.exportClinicalHistory(id);
   }
 
   @Get(':id')

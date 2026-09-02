@@ -39,6 +39,7 @@ describe('PatientsService', () => {
             create: jest.fn(),
             findMany: jest.fn(),
             findById: jest.fn(),
+            findClinicalHistoryForExport: jest.fn(),
             findByDocument: jest.fn(),
             update: jest.fn(),
             deactivate: jest.fn(),
@@ -112,6 +113,108 @@ describe('PatientsService', () => {
     it('lanza NotFoundException si no existe', async () => {
       repo.findById.mockResolvedValue(null);
       await expect(service.findOne('inexistente')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('exportClinicalHistory', () => {
+    const recordCreatedAt = new Date('2025-05-10T15:00:00.000Z');
+    const documentCreatedAt = new Date('2025-05-11T15:00:00.000Z');
+
+    const snapshot = {
+      id: mockPatient.id,
+      documentType: mockPatient.documentType,
+      documentNumber: mockPatient.documentNumber,
+      firstName: mockPatient.firstName,
+      lastName: mockPatient.lastName,
+      dateOfBirth: mockPatient.dateOfBirth,
+      sex: mockPatient.sex,
+      phone: mockPatient.phone,
+      email: mockPatient.email,
+      address: mockPatient.address,
+      clinicalRecords: [
+        {
+          id: 'record-1',
+          recordType: 'CONSULTATION' as const,
+          origin: 'MANUAL' as const,
+          status: 'VOIDED' as const,
+          attendedAt: recordCreatedAt,
+          summary: 'Consulta original',
+          notes: 'Nota clínica',
+          doctorName: 'Dra. Rivera',
+          service: 'Medicina interna',
+          preliminaryDiagnosis: 'Diagnóstico preliminar',
+          plan: 'Plan clínico',
+          priority: 'PRIORITY',
+          parentRecordId: null,
+          voidReason: 'Duplicado',
+          createdAt: recordCreatedAt,
+          updatedAt: recordCreatedAt,
+        },
+      ],
+      medicalDocuments: [
+        {
+          id: 'document-validated',
+          originalName: 'validado.pdf',
+          mimeType: 'application/pdf',
+          sizeBytes: 1024,
+          status: 'VALIDATED' as const,
+          ocrText: 'OCR original',
+          correctedText: 'Texto clínico corregido',
+          rejectReason: null,
+          createdAt: documentCreatedAt,
+          processedAt: documentCreatedAt,
+          correctedAt: documentCreatedAt,
+          reviewedAt: documentCreatedAt,
+        },
+        {
+          id: 'document-pending-review',
+          originalName: 'sin-validar.pdf',
+          mimeType: 'application/pdf',
+          sizeBytes: 2048,
+          status: 'PROCESSED' as const,
+          ocrText: 'Texto OCR aún no validado',
+          correctedText: null,
+          rejectReason: null,
+          createdAt: documentCreatedAt,
+          processedAt: documentCreatedAt,
+          correctedAt: null,
+          reviewedAt: null,
+        },
+      ],
+    };
+
+    it('incluye todos los estados y solo expone texto de documentos validados', async () => {
+      repo.findClinicalHistoryForExport.mockResolvedValue(snapshot);
+
+      const result = await service.exportClinicalHistory(mockPatient.id);
+
+      expect(repo.findClinicalHistoryForExport).toHaveBeenCalledWith(mockPatient.id);
+      expect(result.records).toHaveLength(1);
+      expect(result.records[0].status).toBe('VOIDED');
+      expect(result.documents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: 'document-validated',
+            clinicalText: 'Texto clínico corregido',
+            textSource: 'CORRECTED',
+          }),
+          expect.objectContaining({
+            id: 'document-pending-review',
+            status: 'PROCESSED',
+            clinicalText: null,
+            textSource: 'NONE',
+          }),
+        ]),
+      );
+      expect(result.generatedAt).toBeInstanceOf(Date);
+    });
+
+    it('lanza NotFoundException si el paciente no existe', async () => {
+      repo.findClinicalHistoryForExport.mockResolvedValue(null);
+
+      await expect(service.exportClinicalHistory('inexistente')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 

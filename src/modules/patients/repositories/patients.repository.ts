@@ -2,6 +2,63 @@ import { Injectable } from '@nestjs/common';
 import { DocumentType, Patient, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
 
+const clinicalHistoryExportArgs = {
+  select: {
+    id: true,
+    documentType: true,
+    documentNumber: true,
+    firstName: true,
+    lastName: true,
+    dateOfBirth: true,
+    sex: true,
+    phone: true,
+    email: true,
+    address: true,
+    clinicalRecords: {
+      select: {
+        id: true,
+        recordType: true,
+        origin: true,
+        status: true,
+        attendedAt: true,
+        summary: true,
+        notes: true,
+        doctorName: true,
+        service: true,
+        preliminaryDiagnosis: true,
+        plan: true,
+        priority: true,
+        parentRecordId: true,
+        voidReason: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: [{ attendedAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    },
+    medicalDocuments: {
+      select: {
+        id: true,
+        originalName: true,
+        mimeType: true,
+        sizeBytes: true,
+        status: true,
+        ocrText: true,
+        correctedText: true,
+        rejectReason: true,
+        createdAt: true,
+        processedAt: true,
+        correctedAt: true,
+        reviewedAt: true,
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    },
+  },
+} satisfies Prisma.PatientDefaultArgs;
+
+export type PatientClinicalHistoryExport = Prisma.PatientGetPayload<
+  typeof clinicalHistoryExportArgs
+>;
+
 export interface FindManyOptions {
   search?: string;
   documentType?: DocumentType;
@@ -39,6 +96,15 @@ export class PatientsRepository {
 
   async findById(id: string): Promise<Patient | null> {
     return this.prisma.patient.findUnique({ where: { id } });
+  }
+
+  async findClinicalHistoryForExport(
+    id: string,
+  ): Promise<PatientClinicalHistoryExport | null> {
+    return this.prisma.patient.findUnique({
+      where: { id },
+      ...clinicalHistoryExportArgs,
+    });
   }
 
   async findByDocument(

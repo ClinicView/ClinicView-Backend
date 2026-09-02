@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentType, Sex } from '@prisma/client';
+import { PERMISSIONS_KEY } from '../../../core/rbac/requires-permissions.decorator';
 import { PatientResponseDto } from '../dto/patient-response.dto';
 import { PatientsController } from '../patients.controller';
 import { PatientsService } from '../patients.service';
@@ -26,6 +27,12 @@ const mockPatientsService = {
   findOne: jest.fn().mockResolvedValue(mockPatient),
   update: jest.fn().mockResolvedValue(mockPatient),
   deactivate: jest.fn().mockResolvedValue({ ...mockPatient, isActive: false }),
+  exportClinicalHistory: jest.fn().mockResolvedValue({
+    patient: mockPatient,
+    records: [],
+    documents: [],
+    generatedAt: new Date('2026-09-02T12:00:00.000Z'),
+  }),
 };
 
 describe('PatientsController', () => {
@@ -63,6 +70,23 @@ describe('PatientsController', () => {
   it('findOne devuelve el paciente correcto', async () => {
     const result = await controller.findOne(mockPatient.id);
     expect(result.id).toBe(mockPatient.id);
+  });
+
+  it('exportClinicalHistory delega la exportación completa en PatientsService', async () => {
+    const result = await controller.exportClinicalHistory(mockPatient.id);
+
+    expect(mockPatientsService.exportClinicalHistory).toHaveBeenCalledWith(mockPatient.id);
+    expect(result.records).toEqual([]);
+    expect(result.documents).toEqual([]);
+  });
+
+  it('protege la exportación con permisos de pacientes, registros y documentos', () => {
+    const permissions = Reflect.getMetadata(
+      PERMISSIONS_KEY,
+      PatientsController.prototype.exportClinicalHistory,
+    );
+
+    expect(permissions).toEqual(['patients.read', 'records.read', 'documents.read']);
   });
 
   it('deactivate devuelve paciente con isActive=false', async () => {

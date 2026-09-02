@@ -1,6 +1,7 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Patient } from '@prisma/client';
 import { CreatePatientDto } from './dto/create-patient.dto';
+import { ClinicalHistoryExportResponseDto } from './dto/clinical-history-export-response.dto';
 import { FindPatientsQueryDto } from './dto/find-patients-query.dto';
 import { PatientResponseDto } from './dto/patient-response.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
@@ -73,6 +74,45 @@ export class PatientsService {
     const patient = await this.patientsRepository.findById(id);
     if (!patient) throw new NotFoundException('Paciente no encontrado.');
     return this.toResponse(patient);
+  }
+
+  async exportClinicalHistory(id: string): Promise<ClinicalHistoryExportResponseDto> {
+    const snapshot = await this.patientsRepository.findClinicalHistoryForExport(id);
+    if (!snapshot) throw new NotFoundException('Paciente no encontrado.');
+
+    const { clinicalRecords, medicalDocuments, ...patient } = snapshot;
+
+    return {
+      patient,
+      records: clinicalRecords,
+      documents: medicalDocuments.map((document) => {
+        const canExposeClinicalText = document.status === 'VALIDATED';
+        const clinicalText = canExposeClinicalText
+          ? (document.correctedText ?? document.ocrText)
+          : null;
+
+        return {
+          id: document.id,
+          originalName: document.originalName,
+          mimeType: document.mimeType,
+          sizeBytes: document.sizeBytes,
+          status: document.status,
+          clinicalText,
+          textSource:
+            clinicalText === null
+              ? 'NONE'
+              : document.correctedText !== null
+                ? 'CORRECTED'
+                : 'OCR',
+          rejectReason: document.rejectReason,
+          createdAt: document.createdAt,
+          processedAt: document.processedAt,
+          correctedAt: document.correctedAt,
+          reviewedAt: document.reviewedAt,
+        };
+      }),
+      generatedAt: new Date(),
+    };
   }
 
   async update(id: string, dto: UpdatePatientDto): Promise<PatientResponseDto> {

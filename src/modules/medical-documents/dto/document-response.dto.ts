@@ -72,5 +72,14 @@ export class DocumentResponseDto {
   @ApiPropertyOptional({ type: String, nullable: true }) processedAt: Date | null;
   @ApiPropertyOptional({ type: String, nullable: true }) reviewedAt: Date | null;
   @ApiPropertyOptional({ type: String, nullable: true }) reviewedBy: string | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: 'array',
+    items: { type: 'string', enum: ['text', 'entities', 'sections', 'phi'] },
+  })
+  validationChecklist: unknown;
+  @ApiProperty() validationAttested: boolean;
+  @ApiPropertyOptional({ type: String, nullable: true }) validationAttestedAt: Date | null;
   @ApiProperty() updatedAt: Date;
+  @ApiProperty({ minimum: 0 }) version: number;
 }

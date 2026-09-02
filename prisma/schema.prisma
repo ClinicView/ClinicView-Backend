@@ -268,6 +268,9 @@ model MedicalDocument {
   processedAt  DateTime?      @map("processed_at")
   reviewedAt   DateTime?      @map("reviewed_at")
   reviewedBy   String?        @map("reviewed_by") @db.Uuid
+  validationChecklist Json?   @map("validation_checklist")
+  validationAttested Boolean  @default(false) @map("validation_attested")
+  validationAttestedAt DateTime? @map("validation_attested_at")
   createdAt    DateTime       @default(now()) @map("created_at")
   createdBy    String?        @map("created_by") @db.Uuid
   updatedAt    DateTime       @updatedAt @map("updated_at")

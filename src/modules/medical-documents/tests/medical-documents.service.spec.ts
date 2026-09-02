@@ -25,6 +25,9 @@ const makeDoc = (overrides: Record<string, unknown> = {}) => ({
   processedAt: null,
   reviewedAt: null,
   reviewedBy: null,
+  validationChecklist: null,
+  validationAttested: false,
+  validationAttestedAt: null,
   createdAt: new Date(),
   createdBy: 'user-uuid',
   updatedAt: new Date(),
@@ -52,6 +55,7 @@ const mockRepo = {
   findByIdAndPatient: jest.fn(),
   updateStatus: jest.fn(),
   saveCorrection: jest.fn(),
+  validateWithCorrection: jest.fn(),
   searchByPatient: jest.fn(),
   isPatientActive: jest.fn(),
   failStaleProcessing: jest.fn(),
@@ -225,24 +229,83 @@ describe('MedicalDocumentsService', () => {
   });
 
   describe('validate', () => {
-    it('valida un documento PROCESSED', async () => {
-      const doc = makeDoc({ status: DocumentStatus.PROCESSED });
-      const validated = makeDoc({ status: DocumentStatus.VALIDATED, reviewedAt: new Date() });
-      mockRepo.findByIdAndPatient.mockResolvedValue(doc);
-      mockRepo.updateStatus.mockResolvedValue(validated);
+    const validationDto = {
+      expectedVersion: 0,
+      correctedText: ' texto final revisado ',
+      correctedEntities: [
+        { type: 'DIAGNOSIS', value: ' Hipertensión ', normalizedValue: ' HTA ' },
+      ],
+      checklistItems: ['text', 'entities', 'sections', 'phi'],
+      attested: true as const,
+    };
 
-      const result = await service.validate('patient-uuid', 'doc-uuid', 'user-uuid');
-      expect(mockRepo.updateStatus).toHaveBeenCalledWith(
+    it('guarda la corrección normalizada y valida en una sola operación', async () => {
+      const doc = makeDoc({ status: DocumentStatus.PROCESSED });
+      const validated = makeDoc({
+        status: DocumentStatus.VALIDATED,
+        correctedText: 'texto final revisado',
+        reviewedAt: new Date(),
+        validationChecklist: ['text', 'entities', 'sections', 'phi'],
+        validationAttested: true,
+        validationAttestedAt: new Date(),
+        version: 1,
+      });
+      mockRepo.findByIdAndPatient.mockResolvedValue(doc);
+      mockRepo.validateWithCorrection.mockResolvedValue(validated);
+
+      const result = await service.validate(
+        'patient-uuid',
         'doc-uuid',
-        DocumentStatus.VALIDATED,
-        expect.objectContaining({ reviewedBy: 'user-uuid' }),
+        validationDto,
+        'user-uuid',
+      );
+      expect(mockRepo.validateWithCorrection).toHaveBeenCalledWith(
+        'doc-uuid',
+        'patient-uuid',
+        0,
+        expect.objectContaining({
+          correctedText: 'texto final revisado',
+          correctedEntities: [
+            { type: 'DIAGNOSIS', value: 'Hipertensión', normalizedValue: 'HTA' },
+          ],
+          reviewedBy: 'user-uuid',
+          validationChecklist: ['text', 'entities', 'sections', 'phi'],
+        }),
       );
       expect(result.status).toBe(DocumentStatus.VALIDATED);
+      expect(result.version).toBe(1);
     });
 
     it('lanza ConflictException si el estado no es PROCESSED', async () => {
       mockRepo.findByIdAndPatient.mockResolvedValue(makeDoc({ status: DocumentStatus.PENDING }));
-      await expect(service.validate('patient-uuid', 'doc-uuid')).rejects.toThrow(ConflictException);
+      await expect(
+        service.validate('patient-uuid', 'doc-uuid', validationDto),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('responde 409 si otro revisor cambió la versión antes de confirmar', async () => {
+      mockRepo.findByIdAndPatient.mockResolvedValue(
+        makeDoc({ status: DocumentStatus.PROCESSED, version: 0 }),
+      );
+      mockRepo.validateWithCorrection.mockResolvedValue(null);
+
+      await expect(
+        service.validate('patient-uuid', 'doc-uuid', validationDto, 'user-uuid'),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('rechaza una atestación incompleta sin escribir cambios', async () => {
+      mockRepo.findByIdAndPatient.mockResolvedValue(
+        makeDoc({ status: DocumentStatus.PROCESSED }),
+      );
+
+      await expect(
+        service.validate('patient-uuid', 'doc-uuid', {
+          ...validationDto,
+          checklistItems: ['text', 'entities'],
+        }),
+      ).rejects.toThrow('Debe confirmar todos los puntos');
+      expect(mockRepo.validateWithCorrection).not.toHaveBeenCalled();
     });
   });
 
@@ -267,6 +330,7 @@ describe('MedicalDocumentsService', () => {
         'patient-uuid',
         'doc-uuid',
         {
+          expectedVersion: 0,
           correctedText: ' texto corregido ',
           correctedEntities: [{ type: 'OBSERVATION', value: 'valor corregido' }],
         },
@@ -275,6 +339,8 @@ describe('MedicalDocumentsService', () => {
 
       expect(mockRepo.saveCorrection).toHaveBeenCalledWith(
         'doc-uuid',
+        'patient-uuid',
+        0,
         expect.objectContaining({
           correctedText: 'texto corregido',
           correctedById: 'user-uuid',
@@ -288,7 +354,24 @@ describe('MedicalDocumentsService', () => {
     it('lanza ConflictException si el documento no esta PROCESSED', async () => {
       mockRepo.findByIdAndPatient.mockResolvedValue(makeDoc({ status: DocumentStatus.PENDING }));
       await expect(
-        service.saveCorrection('patient-uuid', 'doc-uuid', { correctedText: 'texto' }),
+        service.saveCorrection('patient-uuid', 'doc-uuid', {
+          expectedVersion: 0,
+          correctedText: 'texto',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('responde 409 si intenta guardar sobre una versión desactualizada', async () => {
+      mockRepo.findByIdAndPatient.mockResolvedValue(
+        makeDoc({ status: DocumentStatus.PROCESSED, version: 1 }),
+      );
+      mockRepo.saveCorrection.mockResolvedValue(null);
+
+      await expect(
+        service.saveCorrection('patient-uuid', 'doc-uuid', {
+          expectedVersion: 0,
+          correctedText: 'texto',
+        }),
       ).rejects.toThrow(ConflictException);
     });
   });

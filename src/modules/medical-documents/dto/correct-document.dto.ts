@@ -1,10 +1,29 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsArray,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+  ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
-class CorrectedEntityDto {
+export const CORRECTED_ENTITY_TYPES = [
+  'DIAGNOSIS',
+  'SYMPTOM',
+  'MEDICATION',
+  'PROCEDURE',
+  'CLINICAL_DATE',
+  'OBSERVATION',
+] as const;
+
+export class CorrectedEntityDto {
   @ApiPropertyOptional({ enum: ['DIAGNOSIS', 'SYMPTOM', 'MEDICATION', 'PROCEDURE', 'CLINICAL_DATE', 'OBSERVATION'] })
   @IsString()
+  @IsIn(CORRECTED_ENTITY_TYPES)
   type: string;
 
   @ApiPropertyOptional()
@@ -20,6 +39,14 @@ class CorrectedEntityDto {
 }
 
 export class CorrectDocumentDto {
+  @ApiProperty({
+    description: 'Versión leída por el cliente. Evita sobrescribir cambios de otro revisor.',
+    minimum: 0,
+  })
+  @IsInt()
+  @Min(0)
+  expectedVersion: number;
+
   @ApiPropertyOptional({
     description: 'Texto corregido por el revisor. No sobrescribe el OCR original.',
     maxLength: 50000,

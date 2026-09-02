@@ -37,6 +37,7 @@ import { DocumentResponseDto } from './dto/document-response.dto';
 import { FindDocumentsQueryDto } from './dto/find-documents-query.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
 import { SearchDocumentsQueryDto } from './dto/search-documents-query.dto';
+import { ValidateDocumentDto } from './dto/validate-document.dto';
 
 const DEFAULT_UPLOAD_MAX_SIZE_MB = 20;
 
@@ -158,16 +159,21 @@ export class MedicalDocumentsController {
   @Patch(':id/validate')
   @RequirePermissions('documents.validate')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Validar documento procesado (revisiÃ³n clÃ­nica)' })
+  @ApiOperation({ summary: 'Guardar la versión final y validar el documento atómicamente' })
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, type: DocumentResponseDto })
+  @ApiResponse({
+    status: 409,
+    description: 'El estado o la versión cambiaron durante la revisión.',
+  })
   validate(
     @Param('patientId', ParseUUIDPipe) patientId: string,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ValidateDocumentDto,
     @Request() req: AuthRequest,
   ): Promise<DocumentResponseDto> {
-    return this.service.validate(patientId, id, req.user?.sub);
+    return this.service.validate(patientId, id, dto, req.user?.sub);
   }
 
   @Patch(':id/correction')

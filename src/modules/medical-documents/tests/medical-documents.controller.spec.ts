@@ -24,7 +24,11 @@ const makeResponse = (overrides: Record<string, unknown> = {}) => ({
   processedAt: null,
   reviewedAt: null,
   reviewedBy: null,
+  validationChecklist: null,
+  validationAttested: false,
+  validationAttestedAt: null,
   updatedAt: new Date(),
+  version: 0,
   ...overrides,
 });
 
@@ -107,15 +111,27 @@ describe('MedicalDocumentsController', () => {
   });
 
   it('validate delega en el servicio', async () => {
+    const dto = {
+      expectedVersion: 0,
+      correctedText: 'texto final',
+      correctedEntities: [],
+      checklistItems: ['text', 'entities', 'sections', 'phi'],
+      attested: true as const,
+    };
     const response = makeResponse({ status: DocumentStatus.VALIDATED });
     mockService.validate.mockResolvedValue(response);
-    const result = await controller.validate('patient-uuid', 'doc-uuid', req);
-    expect(mockService.validate).toHaveBeenCalledWith('patient-uuid', 'doc-uuid', 'user-uuid');
+    const result = await controller.validate('patient-uuid', 'doc-uuid', dto, req);
+    expect(mockService.validate).toHaveBeenCalledWith(
+      'patient-uuid',
+      'doc-uuid',
+      dto,
+      'user-uuid',
+    );
     expect(result.status).toBe(DocumentStatus.VALIDATED);
   });
 
   it('saveCorrection delega en el servicio', async () => {
-    const dto = { correctedText: 'texto corregido', correctedEntities: [] };
+    const dto = { expectedVersion: 0, correctedText: 'texto corregido', correctedEntities: [] };
     const response = makeResponse({ status: DocumentStatus.PROCESSED, correctedText: 'texto corregido' });
     mockService.saveCorrection.mockResolvedValue(response);
 

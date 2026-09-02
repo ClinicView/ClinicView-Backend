@@ -25,6 +25,26 @@ export interface UpdateStatusExtra {
   updatedBy?: string | null;
 }
 
+export interface SaveCorrectionData {
+  correctedText?: string | null;
+  correctedEntities?: Prisma.InputJsonValue | typeof Prisma.JsonNull;
+  correctedAt: Date;
+  correctedById?: string | null;
+  updatedBy?: string | null;
+}
+
+export interface ValidateWithCorrectionData {
+  correctedText: string;
+  correctedEntities: Prisma.InputJsonValue;
+  correctedAt: Date;
+  correctedById?: string | null;
+  reviewedAt: Date;
+  reviewedBy?: string | null;
+  validationChecklist: Prisma.InputJsonValue;
+  validationAttestedAt: Date;
+  updatedBy?: string | null;
+}
+
 @Injectable()
 export class MedicalDocumentsRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -123,17 +143,53 @@ export class MedicalDocumentsRepository {
 
   async saveCorrection(
     id: string,
-    data: {
-      correctedText?: string | null;
-      correctedEntities?: Prisma.InputJsonValue | typeof Prisma.JsonNull;
-      correctedAt: Date;
-      correctedById?: string | null;
-      updatedBy?: string | null;
-    },
-  ): Promise<MedicalDocument> {
-    return this.prisma.medicalDocument.update({
-      where: { id },
-      data: { ...data, version: { increment: 1 } },
+    patientId: string,
+    expectedVersion: number,
+    data: SaveCorrectionData,
+  ): Promise<MedicalDocument | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const result = await tx.medicalDocument.updateMany({
+        where: {
+          id,
+          patientId,
+          status: DocumentStatus.PROCESSED,
+          version: expectedVersion,
+        },
+        data: { ...data, version: { increment: 1 } },
+      });
+      if (result.count !== 1) return null;
+      return tx.medicalDocument.findUnique({ where: { id } });
+    });
+  }
+
+  /**
+   * Persiste la versión final y la valida en la misma transacción.
+   * El predicado por estado + versión funciona como compare-and-swap: si
+   * otro revisor guardó o validó antes, no se modifica ninguna columna.
+   */
+  async validateWithCorrection(
+    id: string,
+    patientId: string,
+    expectedVersion: number,
+    data: ValidateWithCorrectionData,
+  ): Promise<MedicalDocument | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const result = await tx.medicalDocument.updateMany({
+        where: {
+          id,
+          patientId,
+          status: DocumentStatus.PROCESSED,
+          version: expectedVersion,
+        },
+        data: {
+          ...data,
+          status: DocumentStatus.VALIDATED,
+          validationAttested: true,
+          version: { increment: 1 },
+        },
+      });
+      if (result.count !== 1) return null;
+      return tx.medicalDocument.findUnique({ where: { id } });
     });
   }
 }

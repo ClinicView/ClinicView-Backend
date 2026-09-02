@@ -17,6 +17,10 @@ import { CorrectDocumentDto } from './dto/correct-document.dto';
 import { DocumentResponseDto } from './dto/document-response.dto';
 import { FindDocumentsQueryDto } from './dto/find-documents-query.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
+import {
+  REQUIRED_VALIDATION_CHECKLIST,
+  ValidateDocumentDto,
+} from './dto/validate-document.dto';
 import { MedicalDocumentsRepository } from './repositories/medical-documents.repository';
 
 const DEFAULT_UPLOAD_MAX_SIZE_MB = 20;
@@ -38,6 +42,18 @@ function getUploadMaxSizeBytes(): number {
 }
 
 const SNIPPET_CONTEXT_CHARS = 80;
+
+function normalizeCorrectedEntities(
+  entities: CorrectDocumentDto['correctedEntities'],
+): Array<{ type: string; value: string; normalizedValue: string | null }> {
+  return (entities ?? [])
+    .map((entity) => ({
+      type: entity.type,
+      value: entity.value.trim(),
+      normalizedValue: entity.normalizedValue?.trim() || null,
+    }))
+    .filter((entity) => entity.value.length > 0);
+}
 
 /** Extrae un fragmento del texto alrededor de la primera coincidencia. */
 function buildSnippet(text: string | null, keyword: string): string | null {
@@ -232,7 +248,12 @@ export class MedicalDocumentsService implements OnModuleInit {
     }
   }
 
-  async validate(patientId: string, id: string, userId?: string): Promise<DocumentResponseDto> {
+  async validate(
+    patientId: string,
+    id: string,
+    dto: ValidateDocumentDto,
+    userId?: string,
+  ): Promise<DocumentResponseDto> {
     const doc = await this.repo.findByIdAndPatient(id, patientId);
     if (!doc) throw new NotFoundException('Documento no encontrado.');
     if (doc.status !== DocumentStatus.PROCESSED) {
@@ -240,10 +261,46 @@ export class MedicalDocumentsService implements OnModuleInit {
         `Solo se puede validar un documento con estado PROCESSED. Estado actual: ${doc.status}.`,
       );
     }
-    const updated = await this.repo.updateStatus(id, DocumentStatus.VALIDATED, {
-      reviewedAt: new Date(),
-      ...(userId && { reviewedBy: userId, updatedBy: userId }),
-    });
+
+    const correctedText = dto.correctedText?.trim();
+    if (!correctedText) {
+      throw new BadRequestException('El texto final revisado no puede estar vacío.');
+    }
+
+    const checklist = new Set(dto.checklistItems);
+    const hasCompleteChecklist =
+      checklist.size === REQUIRED_VALIDATION_CHECKLIST.length &&
+      REQUIRED_VALIDATION_CHECKLIST.every((item) => checklist.has(item));
+    if (dto.attested !== true || !hasCompleteChecklist) {
+      throw new BadRequestException(
+        'Debe confirmar todos los puntos del checklist antes de validar.',
+      );
+    }
+
+    const now = new Date();
+    const updated = await this.repo.validateWithCorrection(
+      id,
+      patientId,
+      dto.expectedVersion,
+      {
+        correctedText,
+        correctedEntities: normalizeCorrectedEntities(dto.correctedEntities) as unknown as Prisma.InputJsonValue,
+        correctedAt: now,
+        reviewedAt: now,
+        validationChecklist: [...REQUIRED_VALIDATION_CHECKLIST] as unknown as Prisma.InputJsonValue,
+        validationAttestedAt: now,
+        ...(userId && {
+          correctedById: userId,
+          reviewedBy: userId,
+          updatedBy: userId,
+        }),
+      },
+    );
+    if (!updated) {
+      throw new ConflictException(
+        'El documento cambió mientras lo revisabas. Recarga la versión actual antes de validar.',
+      );
+    }
     return this.toResponse(updated);
   }
 
@@ -267,14 +324,20 @@ export class MedicalDocumentsService implements OnModuleInit {
       throw new BadRequestException('Debe enviar texto corregido o entidades corregidas.');
     }
 
-    const updated = await this.repo.saveCorrection(id, {
+    const updated = await this.repo.saveCorrection(id, patientId, dto.expectedVersion, {
       ...(hasCorrectedText && { correctedText: dto.correctedText?.trim() ?? null }),
       ...(hasCorrectedEntities && {
-        correctedEntities: (dto.correctedEntities ?? []) as unknown as Prisma.InputJsonValue,
+        correctedEntities: normalizeCorrectedEntities(dto.correctedEntities) as unknown as Prisma.InputJsonValue,
       }),
       correctedAt: new Date(),
       ...(userId && { correctedById: userId, updatedBy: userId }),
     });
+
+    if (!updated) {
+      throw new ConflictException(
+        'El documento cambió mientras lo editabas. Recarga la versión actual antes de guardar.',
+      );
+    }
 
     return this.toResponse(updated);
   }
@@ -354,7 +417,11 @@ export class MedicalDocumentsService implements OnModuleInit {
       processedAt: doc.processedAt,
       reviewedAt: doc.reviewedAt,
       reviewedBy: doc.reviewedBy,
+      validationChecklist: doc.validationChecklist,
+      validationAttested: doc.validationAttested,
+      validationAttestedAt: doc.validationAttestedAt,
       updatedAt: doc.updatedAt,
+      version: doc.version,
     };
   }
 }

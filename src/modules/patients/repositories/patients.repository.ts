@@ -31,7 +31,9 @@ const clinicalHistoryExportArgs = {
         parentRecordId: true,
         voidReason: true,
         createdAt: true,
+        createdBy: true,
         updatedAt: true,
+        updatedBy: true,
       },
       orderBy: [{ attendedAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
     },
@@ -48,7 +50,13 @@ const clinicalHistoryExportArgs = {
         createdAt: true,
         processedAt: true,
         correctedAt: true,
+        correctedById: true,
         reviewedAt: true,
+        reviewedBy: true,
+        validationChecklist: true,
+        validationAttestedAt: true,
+        createdBy: true,
+        updatedBy: true,
       },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     },
@@ -101,10 +109,14 @@ export class PatientsRepository {
   async findClinicalHistoryForExport(
     id: string,
   ): Promise<PatientClinicalHistoryExport | null> {
-    return this.prisma.patient.findUnique({
-      where: { id },
-      ...clinicalHistoryExportArgs,
-    });
+    return this.prisma.$transaction(
+      (transaction) =>
+        transaction.patient.findUnique({
+          where: { id },
+          ...clinicalHistoryExportArgs,
+        }),
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
   }
 
   async findByDocument(

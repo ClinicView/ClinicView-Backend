@@ -1,4 +1,10 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Patient } from '@prisma/client';
 import {
   databaseDateToDateOnly,
@@ -20,6 +26,8 @@ export interface PaginatedResponse<T> {
 
 @Injectable()
 export class PatientsService {
+  private readonly logger = new Logger(PatientsService.name);
+
   constructor(private readonly patientsRepository: PatientsRepository) {}
 
   async create(dto: CreatePatientDto): Promise<PatientResponseDto> {
@@ -80,13 +88,17 @@ export class PatientsService {
     return this.toResponse(patient);
   }
 
-  async exportClinicalHistory(id: string): Promise<ClinicalHistoryExportResponseDto> {
+  async exportClinicalHistory(
+    id: string,
+    actorId: string,
+  ): Promise<ClinicalHistoryExportResponseDto> {
+    if (!actorId) throw new UnauthorizedException('No se pudo identificar al usuario autenticado.');
     const snapshot = await this.patientsRepository.findClinicalHistoryForExport(id);
     if (!snapshot) throw new NotFoundException('Paciente no encontrado.');
 
     const { clinicalRecords, medicalDocuments, ...patient } = snapshot;
 
-    return {
+    const result: ClinicalHistoryExportResponseDto = {
       patient: {
         ...patient,
         dateOfBirth: databaseDateToDateOnly(patient.dateOfBirth),
@@ -94,8 +106,10 @@ export class PatientsService {
       records: clinicalRecords,
       documents: medicalDocuments.map((document) => {
         const canExposeClinicalText = document.status === 'VALIDATED';
+        const correctedText = document.correctedText?.trim();
+        const ocrText = document.ocrText?.trim();
         const clinicalText = canExposeClinicalText
-          ? (document.correctedText ?? document.ocrText)
+          ? (correctedText || ocrText || null)
           : null;
 
         return {
@@ -108,18 +122,37 @@ export class PatientsService {
           textSource:
             clinicalText === null
               ? 'NONE'
-              : document.correctedText !== null
+              : correctedText
                 ? 'CORRECTED'
                 : 'OCR',
           rejectReason: document.rejectReason,
           createdAt: document.createdAt,
           processedAt: document.processedAt,
           correctedAt: document.correctedAt,
+          correctedById: document.correctedById,
           reviewedAt: document.reviewedAt,
+          reviewedBy: document.reviewedBy,
+          validationChecklist: document.validationChecklist,
+          validationAttestedAt: document.validationAttestedAt,
+          createdBy: document.createdBy,
+          updatedBy: document.updatedBy,
         };
       }),
       generatedAt: new Date(),
     };
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'clinical_history_exported',
+        actorId,
+        patientId: id,
+        recordCount: result.records.length,
+        documentCount: result.documents.length,
+        generatedAt: result.generatedAt.toISOString(),
+      }),
+    );
+
+    return result;
   }
 
   async update(id: string, dto: UpdatePatientDto): Promise<PatientResponseDto> {

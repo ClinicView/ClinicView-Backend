@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -9,6 +10,7 @@ import {
   Patch,
   Post,
   Query,
+  Request,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -29,6 +31,10 @@ import { FindPatientsQueryDto } from './dto/find-patients-query.dto';
 import { PatientResponseDto } from './dto/patient-response.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 import { PaginatedResponse, PatientsService } from './patients.service';
+
+interface AuthRequest {
+  user: { sub: string };
+}
 
 @ApiTags('patients')
 @ApiBearerAuth()
@@ -67,6 +73,8 @@ export class PatientsController {
 
   @Get(':id/clinical-history/export')
   @RequirePermissions('patients.read', 'records.read', 'documents.read')
+  @Header('Cache-Control', 'private, no-store, max-age=0')
+  @Header('Pragma', 'no-cache')
   @ApiOperation({
     summary: 'Obtener la historia clínica completa para exportación',
     description:
@@ -79,8 +87,9 @@ export class PatientsController {
   @ApiNotFoundResponse({ description: 'Paciente no encontrado.' })
   exportClinicalHistory(
     @Param('id', ParseUUIDPipe) id: string,
+    @Request() request: AuthRequest,
   ): Promise<ClinicalHistoryExportResponseDto> {
-    return this.patientsService.exportClinicalHistory(id);
+    return this.patientsService.exportClinicalHistory(id, request.user.sub);
   }
 
   @Get(':id')

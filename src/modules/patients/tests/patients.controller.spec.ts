@@ -73,9 +73,13 @@ describe('PatientsController', () => {
   });
 
   it('exportClinicalHistory delega la exportación completa en PatientsService', async () => {
-    const result = await controller.exportClinicalHistory(mockPatient.id);
+    const request = { user: { sub: 'actor-uuid' } };
+    const result = await controller.exportClinicalHistory(mockPatient.id, request);
 
-    expect(mockPatientsService.exportClinicalHistory).toHaveBeenCalledWith(mockPatient.id);
+    expect(mockPatientsService.exportClinicalHistory).toHaveBeenCalledWith(
+      mockPatient.id,
+      'actor-uuid',
+    );
     expect(result.records).toEqual([]);
     expect(result.documents).toEqual([]);
   });

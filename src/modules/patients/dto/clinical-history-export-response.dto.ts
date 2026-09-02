@@ -38,7 +38,9 @@ export class ClinicalHistoryExportRecordDto {
   @ApiPropertyOptional({ type: String, nullable: true }) parentRecordId: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) voidReason: string | null;
   @ApiProperty() createdAt: Date;
+  @ApiPropertyOptional({ type: String, nullable: true }) createdBy: string | null;
   @ApiProperty() updatedAt: Date;
+  @ApiPropertyOptional({ type: String, nullable: true }) updatedBy: string | null;
 }
 
 export class ClinicalHistoryExportDocumentDto {
@@ -60,7 +62,13 @@ export class ClinicalHistoryExportDocumentDto {
   @ApiProperty() createdAt: Date;
   @ApiPropertyOptional({ type: Date, nullable: true }) processedAt: Date | null;
   @ApiPropertyOptional({ type: Date, nullable: true }) correctedAt: Date | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) correctedById: string | null;
   @ApiPropertyOptional({ type: Date, nullable: true }) reviewedAt: Date | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) reviewedBy: string | null;
+  @ApiPropertyOptional({ type: Object, nullable: true }) validationChecklist: unknown;
+  @ApiPropertyOptional({ type: Date, nullable: true }) validationAttestedAt: Date | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) createdBy: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) updatedBy: string | null;
 }
 
 export class ClinicalHistoryExportResponseDto {

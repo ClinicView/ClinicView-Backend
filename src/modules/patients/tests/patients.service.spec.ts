@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentType, Patient, Sex } from '@prisma/client';
 import { CreatePatientDto } from '../dto/create-patient.dto';
@@ -149,7 +149,9 @@ describe('PatientsService', () => {
           parentRecordId: null,
           voidReason: 'Duplicado',
           createdAt: recordCreatedAt,
+          createdBy: 'creator-uuid',
           updatedAt: recordCreatedAt,
+          updatedBy: 'updater-uuid',
         },
       ],
       medicalDocuments: [
@@ -165,7 +167,13 @@ describe('PatientsService', () => {
           createdAt: documentCreatedAt,
           processedAt: documentCreatedAt,
           correctedAt: documentCreatedAt,
+          correctedById: 'corrector-uuid',
           reviewedAt: documentCreatedAt,
+          reviewedBy: 'reviewer-uuid',
+          validationChecklist: { schemaVersion: 1, locale: 'es-PE', items: [] },
+          validationAttestedAt: documentCreatedAt,
+          createdBy: 'creator-uuid',
+          updatedBy: 'reviewer-uuid',
         },
         {
           id: 'document-pending-review',
@@ -179,7 +187,13 @@ describe('PatientsService', () => {
           createdAt: documentCreatedAt,
           processedAt: documentCreatedAt,
           correctedAt: null,
+          correctedById: null,
           reviewedAt: null,
+          reviewedBy: null,
+          validationChecklist: null,
+          validationAttestedAt: null,
+          createdBy: 'creator-uuid',
+          updatedBy: null,
         },
       ],
     };
@@ -187,7 +201,7 @@ describe('PatientsService', () => {
     it('incluye todos los estados y solo expone texto de documentos validados', async () => {
       repo.findClinicalHistoryForExport.mockResolvedValue(snapshot);
 
-      const result = await service.exportClinicalHistory(mockPatient.id);
+      const result = await service.exportClinicalHistory(mockPatient.id, 'actor-uuid');
 
       expect(repo.findClinicalHistoryForExport).toHaveBeenCalledWith(mockPatient.id);
       expect(result.records).toHaveLength(1);
@@ -211,10 +225,35 @@ describe('PatientsService', () => {
       expect(result.generatedAt).toBeInstanceOf(Date);
     });
 
+    it('usa OCR si una corrección histórica validada solo contiene espacios', async () => {
+      repo.findClinicalHistoryForExport.mockResolvedValue({
+        ...snapshot,
+        medicalDocuments: [
+          {
+            ...snapshot.medicalDocuments[0],
+            correctedText: '   ',
+          },
+        ],
+      });
+
+      const result = await service.exportClinicalHistory(mockPatient.id, 'actor-uuid');
+
+      expect(result.documents[0]).toEqual(
+        expect.objectContaining({ clinicalText: 'OCR original', textSource: 'OCR' }),
+      );
+    });
+
+    it('exige actor autenticado antes de leer datos clínicos', async () => {
+      await expect(service.exportClinicalHistory(mockPatient.id, '')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(repo.findClinicalHistoryForExport).not.toHaveBeenCalled();
+    });
+
     it('lanza NotFoundException si el paciente no existe', async () => {
       repo.findClinicalHistoryForExport.mockResolvedValue(null);
 
-      await expect(service.exportClinicalHistory('inexistente')).rejects.toThrow(
+      await expect(service.exportClinicalHistory('inexistente', 'actor-uuid')).rejects.toThrow(
         NotFoundException,
       );
     });

@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { RecordOrigin, RecordStatus } from '@prisma/client';
+import { parseClinicalDateFilter } from '../../common/validation/clinical-date';
 import { PrismaService } from '../../database/prisma.service';
 import { CorrectRecordDto } from './dto/correct-record.dto';
 import { CreateRecordDto } from './dto/create-record.dto';
@@ -50,13 +51,16 @@ export class ClinicalRecordsService {
   ): Promise<{ data: RecordResponseDto[]; total: number; page: number; limit: number }> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
+    const from = query.from ? parseClinicalDateFilter(query.from, 'from') : undefined;
+    const to = query.to ? parseClinicalDateFilter(query.to, 'to') : undefined;
 
     const { records, total } = await this.repo.findByPatient(patientId, {
       recordType: query.recordType,
       status: query.status,
       origin: query.origin,
-      from: query.from ? new Date(query.from) : undefined,
-      to: query.to ? new Date(query.to) : undefined,
+      from: from?.date,
+      to: to?.date,
+      toExclusive: to?.exclusive,
       page,
       limit,
     });

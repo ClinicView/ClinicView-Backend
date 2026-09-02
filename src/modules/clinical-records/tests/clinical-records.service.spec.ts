@@ -115,6 +115,24 @@ describe('ClinicalRecordsService', () => {
         expect.objectContaining({ page: 1, limit: 20 }),
       );
     });
+
+    it('convierte un rango date-only al día completo de America/Lima', async () => {
+      mockRepo.findByPatient.mockResolvedValue({ records: [], total: 0 });
+
+      await service.findByPatient('patient-uuid', {
+        from: '2026-09-02',
+        to: '2026-09-02',
+      });
+
+      expect(mockRepo.findByPatient).toHaveBeenCalledWith(
+        'patient-uuid',
+        expect.objectContaining({
+          from: new Date('2026-09-02T05:00:00.000Z'),
+          to: new Date('2026-09-03T05:00:00.000Z'),
+          toExclusive: true,
+        }),
+      );
+    });
   });
 
   describe('findOne', () => {

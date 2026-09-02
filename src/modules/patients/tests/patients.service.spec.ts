@@ -73,6 +73,7 @@ describe('PatientsService', () => {
       expect(repo.findByDocument).toHaveBeenCalledWith(dto.documentType, dto.documentNumber);
       expect(repo.create).toHaveBeenCalled();
       expect(result.id).toBe(mockPatient.id);
+      expect(result.dateOfBirth).toBe('1985-06-15');
     });
 
     it('lanza ConflictException si el documento ya existe', async () => {
@@ -191,6 +192,7 @@ describe('PatientsService', () => {
       expect(repo.findClinicalHistoryForExport).toHaveBeenCalledWith(mockPatient.id);
       expect(result.records).toHaveLength(1);
       expect(result.records[0].status).toBe('VOIDED');
+      expect(result.patient.dateOfBirth).toBe('1985-06-15');
       expect(result.documents).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

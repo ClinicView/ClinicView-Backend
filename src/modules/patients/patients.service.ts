@@ -1,5 +1,9 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Patient } from '@prisma/client';
+import {
+  databaseDateToDateOnly,
+  dateOnlyToDatabaseDate,
+} from '../../common/validation/clinical-date';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { ClinicalHistoryExportResponseDto } from './dto/clinical-history-export-response.dto';
 import { FindPatientsQueryDto } from './dto/find-patients-query.dto';
@@ -32,7 +36,7 @@ export class PatientsService {
       documentNumber: dto.documentNumber,
       firstName: dto.firstName,
       lastName: dto.lastName,
-      dateOfBirth: new Date(dto.dateOfBirth),
+      dateOfBirth: dateOnlyToDatabaseDate(dto.dateOfBirth),
       sex: dto.sex,
       phone: dto.phone,
       email: dto.email,
@@ -83,7 +87,10 @@ export class PatientsService {
     const { clinicalRecords, medicalDocuments, ...patient } = snapshot;
 
     return {
-      patient,
+      patient: {
+        ...patient,
+        dateOfBirth: databaseDateToDateOnly(patient.dateOfBirth),
+      },
       records: clinicalRecords,
       documents: medicalDocuments.map((document) => {
         const canExposeClinicalText = document.status === 'VALIDATED';
@@ -122,7 +129,9 @@ export class PatientsService {
     const data: Parameters<typeof this.patientsRepository.update>[1] = {};
     if (dto.firstName !== undefined) data.firstName = dto.firstName;
     if (dto.lastName !== undefined) data.lastName = dto.lastName;
-    if (dto.dateOfBirth !== undefined) data.dateOfBirth = new Date(dto.dateOfBirth);
+    if (dto.dateOfBirth !== undefined) {
+      data.dateOfBirth = dateOnlyToDatabaseDate(dto.dateOfBirth);
+    }
     if (dto.sex !== undefined) data.sex = dto.sex;
     if (dto.phone !== undefined) data.phone = dto.phone;
     if (dto.email !== undefined) data.email = dto.email;
@@ -153,7 +162,7 @@ export class PatientsService {
       documentNumber: patient.documentNumber,
       firstName: patient.firstName,
       lastName: patient.lastName,
-      dateOfBirth: patient.dateOfBirth,
+      dateOfBirth: databaseDateToDateOnly(patient.dateOfBirth),
       sex: patient.sex,
       phone: patient.phone,
       email: patient.email,

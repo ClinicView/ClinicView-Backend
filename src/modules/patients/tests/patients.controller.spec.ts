@@ -11,7 +11,7 @@ const mockPatient: PatientResponseDto = {
   documentNumber: '12345678',
   firstName: 'María',
   lastName: 'García López',
-  dateOfBirth: new Date('1985-06-15'),
+  dateOfBirth: '1985-06-15',
   sex: Sex.F,
   phone: null,
   email: null,

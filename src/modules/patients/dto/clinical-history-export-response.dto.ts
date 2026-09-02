@@ -14,7 +14,8 @@ export class ClinicalHistoryExportPatientDto {
   @ApiProperty() documentNumber: string;
   @ApiProperty() firstName: string;
   @ApiProperty() lastName: string;
-  @ApiProperty() dateOfBirth: Date;
+  @ApiProperty({ type: String, format: 'date', example: '1985-06-15' })
+  dateOfBirth: string;
   @ApiProperty({ enum: Sex }) sex: Sex;
   @ApiPropertyOptional({ type: String, nullable: true }) phone: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) email: string | null;

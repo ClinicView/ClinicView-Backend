@@ -3,12 +3,12 @@ import { Type } from 'class-transformer';
 import {
   IsEnum,
   IsInt,
-  IsISO8601,
   IsOptional,
   Max,
   Min,
 } from 'class-validator';
 import { RecordOrigin, RecordStatus, RecordType } from '@prisma/client';
+import { IsClinicalDateFilter } from '../../../common/validation/clinical-date';
 
 export class FindRecordsQueryDto {
   @ApiPropertyOptional({ enum: RecordType })
@@ -26,14 +26,22 @@ export class FindRecordsQueryDto {
   @IsEnum(RecordOrigin)
   origin?: RecordOrigin;
 
-  @ApiPropertyOptional({ description: 'Desde (ISO 8601, inclusivo)' })
+  @ApiPropertyOptional({
+    description:
+      'Desde, inclusivo: YYYY-MM-DD (inicio del día en America/Lima) o ISO 8601 con zona',
+    examples: ['2026-09-02', '2026-09-02T09:30:00-05:00'],
+  })
   @IsOptional()
-  @IsISO8601()
+  @IsClinicalDateFilter()
   from?: string;
 
-  @ApiPropertyOptional({ description: 'Hasta (ISO 8601, inclusivo)' })
+  @ApiPropertyOptional({
+    description:
+      'Hasta: YYYY-MM-DD incluye todo el día en America/Lima; un ISO 8601 con zona es inclusivo',
+    examples: ['2026-09-02', '2026-09-02T18:00:00-05:00'],
+  })
   @IsOptional()
-  @IsISO8601()
+  @IsClinicalDateFilter()
   to?: string;
 
   @ApiPropertyOptional({ default: 1, minimum: 1 })

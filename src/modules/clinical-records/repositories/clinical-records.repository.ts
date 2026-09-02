@@ -14,6 +14,7 @@ export interface FindRecordsFilters {
   origin?: RecordOrigin;
   from?: Date;
   to?: Date;
+  toExclusive?: boolean;
   page: number;
   limit: number;
 }
@@ -39,7 +40,8 @@ export class ClinicalRecordsRepository {
         ? {
             attendedAt: {
               ...(filters.from && { gte: filters.from }),
-              ...(filters.to && { lte: filters.to }),
+              ...(filters.to &&
+                (filters.toExclusive ? { lt: filters.to } : { lte: filters.to })),
             },
           }
         : {}),

@@ -1,15 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { DocumentType, Sex } from '@prisma/client';
 import {
-  IsDateString,
   IsEmail,
   IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
-  Matches,
   MaxLength,
 } from 'class-validator';
+import { IsPastOrPresentClinicalDate } from '../../../common/validation/clinical-date';
 
 export class CreatePatientDto {
   @ApiProperty({ enum: DocumentType, example: DocumentType.DNI })
@@ -34,11 +33,13 @@ export class CreatePatientDto {
   @MaxLength(100)
   lastName: string;
 
-  @ApiProperty({ example: '1985-06-15', description: 'Fecha en formato YYYY-MM-DD' })
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
-    message: 'dateOfBirth debe usar exactamente el formato YYYY-MM-DD.',
+  @ApiProperty({
+    type: String,
+    format: 'date',
+    example: '1985-06-15',
+    description: 'Fecha civil en formato YYYY-MM-DD; no puede estar en el futuro en Lima',
   })
-  @IsDateString({ strict: true, strictSeparator: true })
+  @IsPastOrPresentClinicalDate()
   dateOfBirth: string;
 
   @ApiProperty({ enum: Sex, example: Sex.F })

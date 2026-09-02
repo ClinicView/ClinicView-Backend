@@ -17,8 +17,8 @@ export class PatientResponseDto {
   @ApiProperty()
   lastName: string;
 
-  @ApiProperty()
-  dateOfBirth: Date;
+  @ApiProperty({ type: String, format: 'date', example: '1985-06-15' })
+  dateOfBirth: string;
 
   @ApiProperty({ enum: Sex })
   sex: Sex;

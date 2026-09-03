@@ -18,11 +18,15 @@ describe('RefreshTokensRepository', () => {
   let repository: RefreshTokensRepository;
   let prisma: {
     $transaction: jest.Mock;
-    refreshToken: { findFirst: jest.Mock; deleteMany: jest.Mock };
+    refreshToken: { findFirst: jest.Mock };
   };
   let tx: {
     user: { findUnique: jest.Mock; update: jest.Mock };
-    refreshToken: { deleteMany: jest.Mock; create: jest.Mock };
+    refreshToken: {
+      findUnique: jest.Mock;
+      deleteMany: jest.Mock;
+      create: jest.Mock;
+    };
   };
 
   beforeEach(() => {
@@ -32,6 +36,7 @@ describe('RefreshTokensRepository', () => {
         update: jest.fn().mockResolvedValue(undefined),
       },
       refreshToken: {
+        findUnique: jest.fn().mockResolvedValue({ userId: input.userId }),
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
         create: jest.fn().mockResolvedValue(undefined),
       },
@@ -40,7 +45,6 @@ describe('RefreshTokensRepository', () => {
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
       refreshToken: {
         findFirst: jest.fn(),
-        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
     };
     repository = new RefreshTokensRepository(prisma as unknown as PrismaService);
@@ -112,9 +116,13 @@ describe('RefreshTokensRepository', () => {
       },
     });
 
-    await repository.deleteByHash(input.tokenHash);
-    expect(prisma.refreshToken.deleteMany).toHaveBeenCalledWith({
+    await expect(repository.deleteByHash(input.tokenHash)).resolves.toBe(input.userId);
+    expect(tx.refreshToken.findUnique).toHaveBeenCalledWith({
       where: { tokenHash: input.tokenHash },
+      select: { userId: true },
+    });
+    expect(tx.refreshToken.deleteMany).toHaveBeenCalledWith({
+      where: { tokenHash: input.tokenHash, userId: input.userId },
     });
   });
 });

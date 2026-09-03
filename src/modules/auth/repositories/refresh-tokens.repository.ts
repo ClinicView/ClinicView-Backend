@@ -106,7 +106,17 @@ export class RefreshTokensRepository {
     }
   }
 
-  async deleteByHash(tokenHash: string): Promise<void> {
-    await this.prisma.refreshToken.deleteMany({ where: { tokenHash } });
+  async deleteByHash(tokenHash: string): Promise<string | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.refreshToken.findUnique({
+        where: { tokenHash },
+        select: { userId: true },
+      });
+      if (!existing) return null;
+      const deleted = await tx.refreshToken.deleteMany({
+        where: { tokenHash, userId: existing.userId },
+      });
+      return deleted.count === 1 ? existing.userId : null;
+    });
   }
 }

@@ -63,4 +63,7 @@ export default () => ({
       1440,
     ),
   },
+  audit: {
+    hashSecret: process.env.AUDIT_HASH_SECRET,
+  },
 });

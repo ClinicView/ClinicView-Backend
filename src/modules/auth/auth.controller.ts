@@ -24,6 +24,9 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
+import { RequestContextService } from '../../core/request-context/request-context.service';
+import { AUDIT_ACTIONS } from '../audit/audit-action';
+import { Audited } from '../audit/audit.decorator';
 import { UserResponseDto } from '../users/dto/user-response.dto';
 import { UsersService } from '../users/users.service';
 import { AuthService, AuthSessionResult } from './auth.service';
@@ -49,9 +52,11 @@ export class AuthController {
     private readonly authService: AuthService,
     private readonly usersService: UsersService,
     private readonly configService: ConfigService,
+    private readonly requestContext: RequestContextService,
   ) {}
 
   @Get('me')
+  @Audited(AUDIT_ACTIONS.CURRENT_USER_VIEWED, { resourceType: 'USER' })
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Obtener la ficha del usuario autenticado' })
@@ -62,6 +67,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Audited(AUDIT_ACTIONS.AUTH_LOGIN, { resourceType: 'USER' })
   @UseGuards(AuthGuard('local'))
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
@@ -82,11 +88,13 @@ export class AuthController {
     const previousRefreshToken = readRefreshCookie({ headers: req.headers ?? {} });
     if (previousRefreshToken) await this.authService.logout(previousRefreshToken);
     const session = await this.authService.login(req.user, dto.rememberMe ?? false);
+    this.requestContext.setActor(session.actorId);
     this.writeSessionCookie(response, session);
     return session.response;
   }
 
   @Post('refresh')
+  @Audited(AUDIT_ACTIONS.AUTH_REFRESH, { resourceType: 'USER' })
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @ApiCookieAuth(REFRESH_COOKIE_SECURITY_NAME)
@@ -110,6 +118,7 @@ export class AuthController {
 
     try {
       const session = await this.authService.refresh(refreshToken);
+      this.requestContext.setActor(session.actorId);
       this.writeSessionCookie(response, session);
       return session.response;
     } catch (error) {
@@ -119,6 +128,7 @@ export class AuthController {
   }
 
   @Post('logout')
+  @Audited(AUDIT_ACTIONS.AUTH_LOGOUT, { resourceType: 'USER' })
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiCookieAuth(REFRESH_COOKIE_SECURITY_NAME)
   @ApiOperation({ summary: 'Revocar la sesión actual y borrar la cookie HttpOnly' })
@@ -129,7 +139,8 @@ export class AuthController {
   ): Promise<void> {
     this.assertTrustedBrowserOrigin(request);
     try {
-      await this.authService.logout(readRefreshCookie(request));
+      const actorId = await this.authService.logout(readRefreshCookie(request));
+      this.requestContext.setActor(actorId);
     } finally {
       this.clearSessionCookie(response);
     }

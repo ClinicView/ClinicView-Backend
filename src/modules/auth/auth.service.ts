@@ -46,6 +46,7 @@ function isAccessJwtPayload(value: unknown): value is JwtPayload {
 }
 
 export interface AuthSessionResult {
+  actorId: string;
   response: TokenResponseDto;
   refreshToken: string;
   rememberMe: boolean;
@@ -95,6 +96,7 @@ export class AuthService {
     }
 
     return {
+      actorId: payload.sub,
       response,
       refreshToken: refresh.token,
       rememberMe,
@@ -149,6 +151,7 @@ export class AuthService {
     }
 
     return {
+      actorId: current.user.id,
       response,
       refreshToken: nextRefresh.token,
       rememberMe: stored.rememberMe,
@@ -156,9 +159,9 @@ export class AuthService {
     };
   }
 
-  async logout(refreshToken: string | null): Promise<void> {
-    if (!refreshToken) return;
-    await this.refreshTokensRepo.deleteByHash(hashToken(refreshToken));
+  async logout(refreshToken: string | null): Promise<string | null> {
+    if (!refreshToken) return null;
+    return this.refreshTokensRepo.deleteByHash(hashToken(refreshToken));
   }
 
   async validateAccessToken(payload: unknown): Promise<JwtPayload> {

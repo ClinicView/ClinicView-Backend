@@ -29,6 +29,8 @@ import type { Response } from 'express';
 import { memoryStorage } from 'multer';
 import { PermissionsGuard } from '../../core/rbac/permissions.guard';
 import { RequirePermissions } from '../../core/rbac/requires-permissions.decorator';
+import { AUDIT_ACTIONS } from '../audit/audit-action';
+import { Audited } from '../audit/audit.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import {
   ClinicalRecordMediaService,
@@ -66,6 +68,11 @@ export class ClinicalRecordMediaController {
   constructor(private readonly service: ClinicalRecordMediaService) {}
 
   @Post()
+  @Audited(AUDIT_ACTIONS.CLINICAL_MEDIA_UPLOADED, {
+    resourceType: 'CLINICAL_MEDIA',
+    patientParam: 'patientId',
+    resourceFromResponseId: true,
+  })
   @RequirePermissions('records.create')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -100,6 +107,11 @@ export class ClinicalRecordMediaController {
   }
 
   @Get(':assetId')
+  @Audited(AUDIT_ACTIONS.CLINICAL_MEDIA_VIEWED, {
+    resourceType: 'CLINICAL_MEDIA',
+    patientParam: 'patientId',
+    resourceParam: 'assetId',
+  })
   @RequirePermissions('records.read')
   @ApiOperation({ summary: 'Obtener metadata segura de una imagen clínica' })
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
@@ -114,6 +126,11 @@ export class ClinicalRecordMediaController {
   }
 
   @Get(':assetId/content')
+  @Audited(AUDIT_ACTIONS.CLINICAL_MEDIA_DOWNLOADED, {
+    resourceType: 'CLINICAL_MEDIA',
+    patientParam: 'patientId',
+    resourceParam: 'assetId',
+  })
   @RequirePermissions('records.read')
   @ApiOperation({ summary: 'Visualizar el contenido privado de una imagen clínica' })
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
@@ -150,6 +167,11 @@ export class ClinicalRecordMediaController {
   }
 
   @Delete(':assetId')
+  @Audited(AUDIT_ACTIONS.CLINICAL_MEDIA_DELETED, {
+    resourceType: 'CLINICAL_MEDIA',
+    patientParam: 'patientId',
+    resourceParam: 'assetId',
+  })
   @RequirePermissions('records.create')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Eliminar con CAS una imagen temporal propia' })

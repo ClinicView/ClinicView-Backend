@@ -31,6 +31,8 @@ import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../core/rbac/permissions.guard';
 import { RequirePermissions } from '../../core/rbac/requires-permissions.decorator';
+import { AUDIT_ACTIONS } from '../audit/audit-action';
+import { Audited } from '../audit/audit.decorator';
 import { MedicalDocumentsService } from './medical-documents.service';
 import { CorrectDocumentDto } from './dto/correct-document.dto';
 import { DocumentResponseDto } from './dto/document-response.dto';
@@ -64,6 +66,11 @@ export class MedicalDocumentsController {
   constructor(private readonly service: MedicalDocumentsService) {}
 
   @Post()
+  @Audited(AUDIT_ACTIONS.DOCUMENT_UPLOADED, {
+    resourceType: 'MEDICAL_DOCUMENT',
+    patientParam: 'patientId',
+    resourceFromResponseId: true,
+  })
   @RequirePermissions('documents.upload')
   @UseInterceptors(FileInterceptor('file', {
     storage: memoryStorage(),
@@ -111,6 +118,11 @@ export class MedicalDocumentsController {
   }
 
   @Get(':id')
+  @Audited(AUDIT_ACTIONS.DOCUMENT_VIEWED, {
+    resourceType: 'MEDICAL_DOCUMENT',
+    patientParam: 'patientId',
+    resourceParam: 'id',
+  })
   @RequirePermissions('documents.read')
   @ApiOperation({ summary: 'Obtener metadatos de un documento' })
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
@@ -124,6 +136,11 @@ export class MedicalDocumentsController {
   }
 
   @Get(':id/file')
+  @Audited(AUDIT_ACTIONS.DOCUMENT_FILE_DOWNLOADED, {
+    resourceType: 'MEDICAL_DOCUMENT',
+    patientParam: 'patientId',
+    resourceParam: 'id',
+  })
   @RequirePermissions('documents.read')
   @ApiOperation({ summary: 'Descargar / visualizar el archivo del documento' })
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
@@ -142,6 +159,11 @@ export class MedicalDocumentsController {
   }
 
   @Post(':id/process')
+  @Audited(AUDIT_ACTIONS.DOCUMENT_PROCESS_REQUESTED, {
+    resourceType: 'MEDICAL_DOCUMENT',
+    patientParam: 'patientId',
+    resourceParam: 'id',
+  })
   @RequirePermissions('documents.upload')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Enviar documento al worker de OCR/NER' })
@@ -157,6 +179,11 @@ export class MedicalDocumentsController {
   }
 
   @Patch(':id/validate')
+  @Audited(AUDIT_ACTIONS.DOCUMENT_VALIDATED, {
+    resourceType: 'MEDICAL_DOCUMENT',
+    patientParam: 'patientId',
+    resourceParam: 'id',
+  })
   @RequirePermissions('documents.validate')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Guardar la versión final y validar el documento atómicamente' })
@@ -177,6 +204,11 @@ export class MedicalDocumentsController {
   }
 
   @Patch(':id/correction')
+  @Audited(AUDIT_ACTIONS.DOCUMENT_CORRECTION_SAVED, {
+    resourceType: 'MEDICAL_DOCUMENT',
+    patientParam: 'patientId',
+    resourceParam: 'id',
+  })
   @RequirePermissions('documents.validate')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Guardar correccion de OCR/entidades sin sobrescribir el original' })
@@ -197,6 +229,11 @@ export class MedicalDocumentsController {
   }
 
   @Patch(':id/reject')
+  @Audited(AUDIT_ACTIONS.DOCUMENT_REJECTED, {
+    resourceType: 'MEDICAL_DOCUMENT',
+    patientParam: 'patientId',
+    resourceParam: 'id',
+  })
   @RequirePermissions('documents.reject')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Rechazar documento (con motivo)' })

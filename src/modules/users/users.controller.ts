@@ -21,6 +21,8 @@ import {
 } from '@nestjs/swagger';
 import { PermissionsGuard } from '../../core/rbac/permissions.guard';
 import { RequirePermissions } from '../../core/rbac/requires-permissions.decorator';
+import { AUDIT_ACTIONS } from '../audit/audit-action';
+import { Audited } from '../audit/audit.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AssignRoleDto } from './dto/assign-role.dto';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -36,6 +38,10 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Post()
+  @Audited(AUDIT_ACTIONS.USER_CREATED, {
+    resourceType: 'USER',
+    resourceFromResponseId: true,
+  })
   @RequirePermissions('users.create')
   @ApiOperation({ summary: 'Crear usuario del sistema (personal de salud o administrador)' })
   @ApiResponse({ status: 201, type: UserResponseDto, description: 'Usuario creado correctamente.' })
@@ -62,6 +68,7 @@ export class UsersController {
   }
 
   @Get(':id')
+  @Audited(AUDIT_ACTIONS.USER_VIEWED, { resourceType: 'USER', resourceParam: 'id' })
   @RequirePermissions('users.read')
   @ApiOperation({ summary: 'Obtener usuario por ID' })
   @ApiResponse({ status: 200, type: UserResponseDto })
@@ -71,6 +78,7 @@ export class UsersController {
   }
 
   @Patch(':id')
+  @Audited(AUDIT_ACTIONS.USER_UPDATED, { resourceType: 'USER', resourceParam: 'id' })
   @RequirePermissions('users.update')
   @ApiOperation({ summary: 'Actualizar perfil profesional o contraseña del usuario' })
   @ApiResponse({ status: 200, type: UserResponseDto })
@@ -83,6 +91,7 @@ export class UsersController {
   }
 
   @Patch(':id/deactivate')
+  @Audited(AUDIT_ACTIONS.USER_DEACTIVATED, { resourceType: 'USER', resourceParam: 'id' })
   @RequirePermissions('users.deactivate')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -95,6 +104,7 @@ export class UsersController {
   }
 
   @Patch(':id/role')
+  @Audited(AUDIT_ACTIONS.USER_ROLE_ASSIGNED, { resourceType: 'USER', resourceParam: 'id' })
   @RequirePermissions('admin.users.manage')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Asignar o reemplazar el rol de un usuario' })

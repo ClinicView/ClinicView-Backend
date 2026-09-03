@@ -28,6 +28,8 @@ import {
 } from '@nestjs/swagger';
 import { PermissionsGuard } from '../../core/rbac/permissions.guard';
 import { RequirePermissions } from '../../core/rbac/requires-permissions.decorator';
+import { AUDIT_ACTIONS } from '../audit/audit-action';
+import { Audited } from '../audit/audit.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { ClinicalHistoryExportResponseDto } from './dto/clinical-history-export-response.dto';
@@ -53,6 +55,10 @@ export class PatientsController {
   constructor(private readonly patientsService: PatientsService) {}
 
   @Post()
+  @Audited(AUDIT_ACTIONS.PATIENT_CREATED, {
+    resourceType: 'PATIENT',
+    resourceFromResponseId: true,
+  })
   @RequirePermissions('patients.create')
   @ApiOperation({ summary: 'Registrar nuevo paciente' })
   @ApiResponse({ status: 201, type: PatientResponseDto })
@@ -129,6 +135,11 @@ export class PatientsController {
   }
 
   @Get(':id/clinical-history/export')
+  @Audited(AUDIT_ACTIONS.CLINICAL_HISTORY_EXPORTED, {
+    resourceType: 'PATIENT',
+    patientParam: 'id',
+    resourceParam: 'id',
+  })
   @RequirePermissions('patients.read', 'records.read', 'documents.read')
   @Header('Cache-Control', 'private, no-store, max-age=0')
   @Header('Pragma', 'no-cache')
@@ -150,6 +161,11 @@ export class PatientsController {
   }
 
   @Get(':id')
+  @Audited(AUDIT_ACTIONS.PATIENT_VIEWED, {
+    resourceType: 'PATIENT',
+    patientParam: 'id',
+    resourceParam: 'id',
+  })
   @RequirePermissions('patients.read')
   @ApiOperation({ summary: 'Obtener paciente por ID' })
   @ApiResponse({ status: 200, type: PatientResponseDto })
@@ -159,6 +175,11 @@ export class PatientsController {
   }
 
   @Patch(':id')
+  @Audited(AUDIT_ACTIONS.PATIENT_UPDATED, {
+    resourceType: 'PATIENT',
+    patientParam: 'id',
+    resourceParam: 'id',
+  })
   @RequirePermissions('patients.update')
   @ApiOperation({ summary: 'Actualizar datos demográficos del paciente' })
   @ApiResponse({ status: 200, type: PatientResponseDto })
@@ -171,6 +192,11 @@ export class PatientsController {
   }
 
   @Patch(':id/deactivate')
+  @Audited(AUDIT_ACTIONS.PATIENT_DEACTIVATED, {
+    resourceType: 'PATIENT',
+    patientParam: 'id',
+    resourceParam: 'id',
+  })
   @RequirePermissions('patients.update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Desactivar paciente (borrado lógico)' })
@@ -181,6 +207,11 @@ export class PatientsController {
   }
 
   @Patch(':id/activate')
+  @Audited(AUDIT_ACTIONS.PATIENT_ACTIVATED, {
+    resourceType: 'PATIENT',
+    patientParam: 'id',
+    resourceParam: 'id',
+  })
   @RequirePermissions('patients.update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reactivar paciente desactivado' })

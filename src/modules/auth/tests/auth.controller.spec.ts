@@ -2,6 +2,7 @@ import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import type { Request, Response } from 'express';
+import { RequestContextService } from '../../../core/request-context/request-context.service';
 import { UsersService } from '../../users/users.service';
 import { AuthController } from '../auth.controller';
 import { AuthService, AuthSessionResult } from '../auth.service';
@@ -18,6 +19,7 @@ const jwtPayload: JwtPayload = {
 };
 
 const session: AuthSessionResult = {
+  actorId: jwtPayload.sub,
   response: { access_token: 'access-token', token_type: 'Bearer', expires_in: 900 },
   refreshToken: 'refresh-token',
   rememberMe: false,
@@ -45,20 +47,23 @@ describe('AuthController', () => {
   let controller: AuthController;
   let authService: { login: jest.Mock; refresh: jest.Mock; logout: jest.Mock };
   let usersService: { findOne: jest.Mock };
+  let requestContext: { setActor: jest.Mock };
   let response: Pick<Response, 'cookie' | 'clearCookie' | 'setHeader'>;
 
   beforeEach(async () => {
     authService = {
       login: jest.fn().mockResolvedValue(session),
       refresh: jest.fn().mockResolvedValue(session),
-      logout: jest.fn().mockResolvedValue(undefined),
+      logout: jest.fn().mockResolvedValue(jwtPayload.sub),
     };
     usersService = { findOne: jest.fn().mockResolvedValue(userResponse) };
+    requestContext = { setActor: jest.fn() };
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
       providers: [
         { provide: AuthService, useValue: authService },
         { provide: UsersService, useValue: usersService },
+        { provide: RequestContextService, useValue: requestContext },
         {
           provide: ConfigService,
           useValue: {
@@ -105,6 +110,7 @@ describe('AuthController', () => {
     );
     expect((response.cookie as jest.Mock).mock.calls[0][2]).not.toHaveProperty('maxAge');
     expect(response.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
+    expect(requestContext.setActor).toHaveBeenCalledWith(jwtPayload.sub);
   });
 
   it('refresh toma exclusivamente la cookie y la rota', async () => {
@@ -115,6 +121,7 @@ describe('AuthController', () => {
 
     expect(authService.refresh).toHaveBeenCalledWith('old-refresh');
     expect(result).toEqual(session.response);
+    expect(requestContext.setActor).toHaveBeenCalledWith(jwtPayload.sub);
     expect(response.cookie).toHaveBeenCalledWith(
       REFRESH_COOKIE_NAME,
       session.refreshToken,
@@ -178,13 +185,16 @@ describe('AuthController', () => {
       response as Response,
     );
     expect(authService.logout).toHaveBeenCalledWith('active-refresh');
+    expect(requestContext.setActor).toHaveBeenCalledWith(jwtPayload.sub);
     expect(response.clearCookie).toHaveBeenCalled();
   });
 
   it('logout es idempotente aunque no haya cookie', async () => {
+    authService.logout.mockResolvedValue(null);
     await controller.logout({ headers: {} } as Request, response as Response);
     expect(authService.logout).toHaveBeenCalledWith(null);
     expect(response.clearCookie).toHaveBeenCalled();
+    expect(requestContext.setActor).toHaveBeenCalledWith(null);
   });
 
   it('me devuelve la ficha del usuario autenticado', async () => {

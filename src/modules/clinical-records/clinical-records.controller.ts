@@ -20,6 +20,8 @@ import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../core/rbac/permissions.guard';
 import { RequirePermissions } from '../../core/rbac/requires-permissions.decorator';
+import { AUDIT_ACTIONS } from '../audit/audit-action';
+import { Audited } from '../audit/audit.decorator';
 import { ClinicalRecordsService } from './clinical-records.service';
 import { CorrectRecordDto } from './dto/correct-record.dto';
 import { CreateRecordDto } from './dto/create-record.dto';
@@ -44,6 +46,11 @@ export class ClinicalRecordsController {
   constructor(private readonly service: ClinicalRecordsService) {}
 
   @Post()
+  @Audited(AUDIT_ACTIONS.CLINICAL_RECORD_CREATED, {
+    resourceType: 'CLINICAL_RECORD',
+    patientParam: 'patientId',
+    resourceFromResponseId: true,
+  })
   @RequirePermissions('records.create')
   @ApiOperation({ summary: 'Crear historia clínica para un paciente' })
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
@@ -116,6 +123,11 @@ export class ClinicalRecordsController {
   }
 
   @Get(':id')
+  @Audited(AUDIT_ACTIONS.CLINICAL_RECORD_VIEWED, {
+    resourceType: 'CLINICAL_RECORD',
+    patientParam: 'patientId',
+    resourceParam: 'id',
+  })
   @RequirePermissions('records.read')
   @ApiOperation({ summary: 'Obtener una historia clínica por ID' })
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
@@ -129,6 +141,11 @@ export class ClinicalRecordsController {
   }
 
   @Post(':id/correct')
+  @Audited(AUDIT_ACTIONS.CLINICAL_RECORD_CORRECTED, {
+    resourceType: 'CLINICAL_RECORD',
+    patientParam: 'patientId',
+    resourceParam: 'id',
+  })
   @RequirePermissions('records.correct')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Emitir corrección sobre una historia clínica activa' })
@@ -145,6 +162,11 @@ export class ClinicalRecordsController {
   }
 
   @Patch(':id/void')
+  @Audited(AUDIT_ACTIONS.CLINICAL_RECORD_VOIDED, {
+    resourceType: 'CLINICAL_RECORD',
+    patientParam: 'patientId',
+    resourceParam: 'id',
+  })
   @RequirePermissions('records.void')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Anular una historia clínica activa' })

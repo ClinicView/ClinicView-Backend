@@ -8,6 +8,8 @@ import {
 } from '@nestjs/swagger';
 import { PermissionsGuard } from '../../core/rbac/permissions.guard';
 import { RequirePermissions } from '../../core/rbac/requires-permissions.decorator';
+import { AUDIT_ACTIONS } from '../audit/audit-action';
+import { Audited } from '../audit/audit.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { DashboardService } from './dashboard.service';
 import type { DashboardStats } from './dashboard.service';
@@ -20,6 +22,7 @@ export class DashboardController {
   constructor(private readonly service: DashboardService) {}
 
   @Get('stats')
+  @Audited(AUDIT_ACTIONS.DASHBOARD_VIEWED, { resourceType: 'DASHBOARD' })
   @RequirePermissions('patients.read', 'documents.read')
   @Header('Cache-Control', 'private, no-store, max-age=0')
   @Header('Pragma', 'no-cache')

@@ -97,7 +97,7 @@ describe('AuthService', () => {
             createSession: jest.fn().mockResolvedValue(true),
             findActiveByHash: jest.fn(),
             rotate: jest.fn().mockResolvedValue(true),
-            deleteByHash: jest.fn().mockResolvedValue(undefined),
+            deleteByHash: jest.fn().mockResolvedValue(mockUser.user.id),
           },
         },
       ],
@@ -151,6 +151,7 @@ describe('AuthService', () => {
         expires_in: 900,
       });
       expect(result.response).not.toHaveProperty('refresh_token');
+      expect(result.actorId).toBe(jwtPayload.sub);
       expect(result.rememberMe).toBe(false);
       expect(refreshTokensRepo.createSession).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -197,6 +198,7 @@ describe('AuthService', () => {
 
       expect(result.response).not.toHaveProperty('permissions');
       expect(result.response.access_token).toBe('access-token');
+      expect(result.actorId).toBe(mockUser.user.id);
       expect(result.refreshToken).toBe('refresh-token');
       expect(result.refreshExpiresAt).toBe(expiresAt);
       expect(refreshTokensRepo.rotate).toHaveBeenCalledWith(
@@ -275,14 +277,14 @@ describe('AuthService', () => {
 
   describe('logout', () => {
     it('elimina por hash sin persistir ni comparar el token en claro', async () => {
-      await service.logout('some-refresh-token');
+      await expect(service.logout('some-refresh-token')).resolves.toBe(mockUser.user.id);
       const deletedHash = refreshTokensRepo.deleteByHash.mock.calls[0][0];
       expect(deletedHash).not.toBe('some-refresh-token');
       expect(deletedHash).toMatch(/^[0-9a-f]{64}$/);
     });
 
     it('es idempotente sin cookie', async () => {
-      await expect(service.logout(null)).resolves.toBeUndefined();
+      await expect(service.logout(null)).resolves.toBeNull();
       expect(refreshTokensRepo.deleteByHash).not.toHaveBeenCalled();
     });
   });

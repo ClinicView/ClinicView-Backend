@@ -20,6 +20,8 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "db:seed": "prisma db seed",
+    "db:seed:demo": "node --env-file-if-exists=.env -r ts-node/register prisma/seed-demo.ts",
+    "db:seed:demo:check": "node --env-file-if-exists=.env -r ts-node/register prisma/seed-demo.ts --validate-only",
     "migration:generate": "prisma migrate dev",
     "migration:run": "prisma migrate deploy"
   },

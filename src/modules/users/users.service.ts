@@ -108,7 +108,9 @@ export class UsersService {
       data.passwordHash = await this.hashingService.hash(dto.password);
     }
 
-    const user = await this.usersRepository.update(id, data);
+    const user = dto.password !== undefined
+      ? await this.usersRepository.updateAndRevokeSessions(id, data)
+      : await this.usersRepository.update(id, data);
     return this.toResponse(user);
   }
 
@@ -142,6 +144,16 @@ export class UsersService {
   /** Para uso exclusivo del módulo auth — incluye permisos para el JWT. */
   async findByEmailWithPermissions(email: string): Promise<UserWithPermissionKeys | null> {
     const result = await this.usersRepository.findByEmailWithPermissions(email);
+    if (!result) return null;
+    const permissionKeys = result.userRoles
+      .flatMap((ur) => ur.role.rolePermissions)
+      .map((rp) => rp.permission.key);
+    return { user: result, permissionKeys };
+  }
+
+  /** Para auth/JWT — obtiene estado y permisos actuales por id, nunca desde claims antiguos. */
+  async findByIdWithPermissions(id: string): Promise<UserWithPermissionKeys | null> {
+    const result = await this.usersRepository.findByIdWithPermissions(id);
     if (!result) return null;
     const permissionKeys = result.userRoles
       .flatMap((ur) => ur.role.rolePermissions)

@@ -1,35 +1,112 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
+
+export interface StoredRefreshToken {
+  userId: string;
+  sessionVersion: number;
+  rememberMe: boolean;
+  expiresAt: Date;
+}
+
+export interface RefreshTokenWrite {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  sessionVersion: number;
+  rememberMe: boolean;
+  expiresAt: Date;
+}
+
+function isSerializationConflict(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      (error as { code?: unknown }).code === 'P2034',
+  );
+}
 
 @Injectable()
 export class RefreshTokensRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async store(userId: string, tokenHash: string, expiresAt: Date): Promise<void> {
-    await this.prisma.refreshToken.create({ data: { userId, tokenHash, expiresAt } });
+  async createSession(input: RefreshTokenWrite, now: Date): Promise<boolean> {
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const user = await tx.user.findUnique({
+            where: { id: input.userId },
+            select: { isActive: true, sessionVersion: true },
+          });
+          if (!user?.isActive || user.sessionVersion !== input.sessionVersion) return false;
+
+          await tx.refreshToken.deleteMany({
+            where: { userId: input.userId, expiresAt: { lte: now } },
+          });
+          await tx.refreshToken.create({ data: input });
+          await tx.user.update({
+            where: { id: input.userId },
+            data: { lastLoginAt: now },
+          });
+          return true;
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (isSerializationConflict(error)) return false;
+      throw error;
+    }
   }
 
-  async findByHash(tokenHash: string): Promise<{ userId: string } | null> {
-    return this.prisma.refreshToken.findUnique({
-      where: { tokenHash },
-      select: { userId: true },
+  async findActiveByHash(tokenHash: string, now: Date): Promise<StoredRefreshToken | null> {
+    return this.prisma.refreshToken.findFirst({
+      where: { tokenHash, expiresAt: { gt: now } },
+      select: {
+        userId: true,
+        sessionVersion: true,
+        rememberMe: true,
+        expiresAt: true,
+      },
     });
   }
 
-  async rotate(oldHash: string, userId: string, newHash: string, expiresAt: Date): Promise<void> {
-    await this.prisma.$transaction([
-      this.prisma.refreshToken.delete({ where: { tokenHash: oldHash } }),
-      this.prisma.refreshToken.create({ data: { userId, tokenHash: newHash, expiresAt } }),
-    ]);
+  async rotate(
+    oldTokenHash: string,
+    next: RefreshTokenWrite,
+    now: Date,
+  ): Promise<boolean> {
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const user = await tx.user.findUnique({
+            where: { id: next.userId },
+            select: { isActive: true, sessionVersion: true },
+          });
+          if (!user?.isActive || user.sessionVersion !== next.sessionVersion) return false;
+
+          const consumed = await tx.refreshToken.deleteMany({
+            where: {
+              tokenHash: oldTokenHash,
+              userId: next.userId,
+              sessionVersion: next.sessionVersion,
+              expiresAt: { gt: now },
+            },
+          });
+          if (consumed.count !== 1) return false;
+
+          await tx.refreshToken.create({ data: next });
+          return true;
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (isSerializationConflict(error)) return false;
+      throw error;
+    }
   }
 
   async deleteByHash(tokenHash: string): Promise<void> {
     await this.prisma.refreshToken.deleteMany({ where: { tokenHash } });
-  }
-
-  async deleteExpiredForUser(userId: string): Promise<void> {
-    await this.prisma.refreshToken.deleteMany({
-      where: { userId, expiresAt: { lt: new Date() } },
-    });
   }
 }

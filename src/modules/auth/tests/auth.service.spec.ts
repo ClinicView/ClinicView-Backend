@@ -5,12 +5,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { HashingService } from '../../../core/security/hashing.service';
 import { UsersService, UserWithPermissionKeys } from '../../users/users.service';
 import { AuthService } from '../auth.service';
-import { JwtPayload } from '../interfaces/jwt-payload.interface';
+import { JwtPayload, RefreshJwtPayload } from '../interfaces/jwt-payload.interface';
 import { RefreshTokensRepository } from '../repositories/refresh-tokens.repository';
 
 const mockUser: UserWithPermissionKeys = {
   user: {
-    id: 'uuid-user-001',
+    id: 'f9b3308d-cc74-4f30-823a-75ca624ff69f',
     email: 'medico@hospital.org',
     username: 'medico',
     firstName: 'Dr.',
@@ -27,29 +27,34 @@ const mockUser: UserWithPermissionKeys = {
     updatedAt: new Date('2026-01-01'),
     updatedBy: null,
     version: 0,
+    sessionVersion: 3,
   },
   permissionKeys: ['patients.read', 'records.read'],
 };
 
 const jwtPayload: JwtPayload = {
-  sub: 'uuid-user-001',
-  email: 'medico@hospital.org',
-  permissions: ['patients.read', 'records.read'],
+  sub: mockUser.user.id,
+  email: mockUser.user.email,
+  permissions: mockUser.permissionKeys,
+  sessionVersion: mockUser.user.sessionVersion,
+  tokenType: 'access',
 };
 
-const mockRefreshTokensRepo = {
-  store: jest.fn().mockResolvedValue(undefined),
-  findByHash: jest.fn(),
-  rotate: jest.fn().mockResolvedValue(undefined),
-  deleteByHash: jest.fn().mockResolvedValue(undefined),
-  deleteExpiredForUser: jest.fn().mockResolvedValue(undefined),
-} satisfies Record<keyof RefreshTokensRepository, jest.Mock>;
+const refreshPayload: RefreshJwtPayload = {
+  sub: mockUser.user.id,
+  sessionVersion: mockUser.user.sessionVersion,
+  tokenType: 'refresh',
+  jti: '86aa1b35-01c6-431c-bc30-00645c3e61d2',
+};
 
 describe('AuthService', () => {
   let service: AuthService;
-  let usersService: jest.Mocked<Pick<UsersService, 'findByEmailWithPermissions' | 'updateLastLogin'>>;
+  let usersService: jest.Mocked<
+    Pick<UsersService, 'findByEmailWithPermissions' | 'findByIdWithPermissions'>
+  >;
   let jwtService: jest.Mocked<Pick<JwtService, 'sign' | 'verify'>>;
   let hashingService: jest.Mocked<Pick<HashingService, 'compare'>>;
+  let refreshTokensRepo: jest.Mocked<RefreshTokensRepository>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -59,28 +64,42 @@ describe('AuthService', () => {
           provide: UsersService,
           useValue: {
             findByEmailWithPermissions: jest.fn(),
-            updateLastLogin: jest.fn().mockResolvedValue(undefined),
+            findByIdWithPermissions: jest.fn(),
           },
         },
         {
           provide: JwtService,
           useValue: {
-            sign: jest.fn().mockReturnValue('signed-token'),
+            sign: jest.fn((payload: { tokenType?: string }) =>
+              payload.tokenType === 'refresh' ? 'refresh-token' : 'access-token',
+            ),
             verify: jest.fn(),
           },
         },
-        {
-          provide: HashingService,
-          useValue: { compare: jest.fn() },
-        },
+        { provide: HashingService, useValue: { compare: jest.fn() } },
         {
           provide: ConfigService,
           useValue: {
-            get: jest.fn().mockReturnValue(604800),
+            get: jest.fn((key: string, fallback: number) => {
+              const values: Record<string, number> = {
+                'jwt.expiresInSeconds': 900,
+                'jwtRefresh.sessionExpiresInSeconds': 86_400,
+                'jwtRefresh.expiresInSeconds': 604_800,
+              };
+              return values[key] ?? fallback;
+            }),
             getOrThrow: jest.fn().mockReturnValue('test-refresh-secret'),
           },
         },
-        { provide: RefreshTokensRepository, useValue: mockRefreshTokensRepo },
+        {
+          provide: RefreshTokensRepository,
+          useValue: {
+            createSession: jest.fn().mockResolvedValue(true),
+            findActiveByHash: jest.fn(),
+            rotate: jest.fn().mockResolvedValue(true),
+            deleteByHash: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 
@@ -88,197 +107,183 @@ describe('AuthService', () => {
     usersService = module.get(UsersService);
     jwtService = module.get(JwtService);
     hashingService = module.get(HashingService);
-    jest.clearAllMocks();
+    refreshTokensRepo = module.get(RefreshTokensRepository);
   });
-
-  // ─── validateUser ─────────────────────────────────────────────────────────────
 
   describe('validateUser', () => {
-    it('devuelve payload JWT cuando las credenciales son correctas', async () => {
-      (usersService.findByEmailWithPermissions as jest.Mock).mockResolvedValue(mockUser);
-      (hashingService.compare as jest.Mock).mockResolvedValue(true);
+    it('normaliza el email y devuelve versión/permisos actuales', async () => {
+      usersService.findByEmailWithPermissions.mockResolvedValue(mockUser);
+      hashingService.compare.mockResolvedValue(true);
 
-      const result = await service.validateUser('medico@hospital.org', 'password123');
-
-      expect(result.sub).toBe(mockUser.user.id);
-      expect(result.email).toBe(mockUser.user.email);
-      expect(result.permissions).toEqual(mockUser.permissionKeys);
+      await expect(service.validateUser(' MEDICO@Hospital.org ', 'password123')).resolves.toEqual(
+        jwtPayload,
+      );
+      expect(usersService.findByEmailWithPermissions).toHaveBeenCalledWith('medico@hospital.org');
     });
 
-    it('lanza UnauthorizedException si el usuario no existe', async () => {
-      (usersService.findByEmailWithPermissions as jest.Mock).mockResolvedValue(null);
-      await expect(service.validateUser('noexiste@hospital.org', 'pass')).rejects.toThrow(
+    it.each([
+      ['usuario inexistente', null, true],
+      ['usuario inactivo', { ...mockUser, user: { ...mockUser.user, isActive: false } }, true],
+    ])('rechaza %s', async (_label, user, passwordValid) => {
+      usersService.findByEmailWithPermissions.mockResolvedValue(user);
+      hashingService.compare.mockResolvedValue(passwordValid);
+      await expect(service.validateUser('medico@hospital.org', 'password123')).rejects.toThrow(
         UnauthorizedException,
       );
     });
 
-    it('lanza UnauthorizedException si el usuario está inactivo', async () => {
-      (usersService.findByEmailWithPermissions as jest.Mock).mockResolvedValue({
-        ...mockUser,
-        user: { ...mockUser.user, isActive: false },
-      });
-      await expect(service.validateUser('medico@hospital.org', 'pass')).rejects.toThrow(
+    it('rechaza una contraseña incorrecta', async () => {
+      usersService.findByEmailWithPermissions.mockResolvedValue(mockUser);
+      hashingService.compare.mockResolvedValue(false);
+      await expect(service.validateUser('medico@hospital.org', 'incorrecta')).rejects.toThrow(
         UnauthorizedException,
       );
-    });
-
-    it('lanza UnauthorizedException si la contraseña es inválida', async () => {
-      (usersService.findByEmailWithPermissions as jest.Mock).mockResolvedValue(mockUser);
-      (hashingService.compare as jest.Mock).mockResolvedValue(false);
-      await expect(service.validateUser('medico@hospital.org', 'wrong-pass')).rejects.toThrow(
-        UnauthorizedException,
-      );
-    });
-
-    it('nunca expone el passwordHash en el payload', async () => {
-      (usersService.findByEmailWithPermissions as jest.Mock).mockResolvedValue(mockUser);
-      (hashingService.compare as jest.Mock).mockResolvedValue(true);
-      const result = await service.validateUser('medico@hospital.org', 'password123');
-      expect(result).not.toHaveProperty('passwordHash');
     });
   });
-
-  // ─── login ────────────────────────────────────────────────────────────────────
 
   describe('login', () => {
-    it('emite access_token y refresh_token', async () => {
-      (jwtService.sign as jest.Mock)
-        .mockReturnValueOnce('access-token')
-        .mockReturnValueOnce('refresh-token');
-      mockRefreshTokensRepo.deleteExpiredForUser.mockResolvedValue(undefined);
-      mockRefreshTokensRepo.store.mockResolvedValue(undefined);
-      (usersService.updateLastLogin as jest.Mock).mockResolvedValue(undefined);
+    it('crea sesión de navegador y devuelve solo access token breve', async () => {
+      const result = await service.login(jwtPayload, false);
 
-      const result = await service.login(jwtPayload);
-
-      expect(result.access_token).toBe('access-token');
-      expect(result.refresh_token).toBe('refresh-token');
-      expect(result.token_type).toBe('Bearer');
-    });
-
-    it('almacena el hash del refresh token en BD', async () => {
-      (jwtService.sign as jest.Mock)
-        .mockReturnValueOnce('access-token')
-        .mockReturnValueOnce('refresh-token');
-      mockRefreshTokensRepo.deleteExpiredForUser.mockResolvedValue(undefined);
-      mockRefreshTokensRepo.store.mockResolvedValue(undefined);
-      (usersService.updateLastLogin as jest.Mock).mockResolvedValue(undefined);
-
-      await service.login(jwtPayload);
-
-      expect(mockRefreshTokensRepo.store).toHaveBeenCalledWith(
-        jwtPayload.sub,
-        expect.any(String),
+      expect(result.response).toEqual({
+        access_token: 'access-token',
+        token_type: 'Bearer',
+        expires_in: 900,
+      });
+      expect(result.response).not.toHaveProperty('refresh_token');
+      expect(result.rememberMe).toBe(false);
+      expect(refreshTokensRepo.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: jwtPayload.sub,
+          sessionVersion: 3,
+          rememberMe: false,
+          tokenHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        }),
         expect.any(Date),
       );
-      // Verifica que no almacena el token en claro
-      const storedHash = mockRefreshTokensRepo.store.mock.calls[0][1] as string;
-      expect(storedHash).not.toBe('refresh-token');
-      expect(storedHash).toHaveLength(64); // SHA-256 hex = 64 chars
+      const stored = refreshTokensRepo.createSession.mock.calls[0][0];
+      expect(stored.tokenHash).not.toBe(result.refreshToken);
+      expect(stored.expiresAt.getTime()).toBeGreaterThan(Date.now() + 86_000_000);
     });
 
-    it('limpia tokens expirados antes de almacenar el nuevo', async () => {
-      (jwtService.sign as jest.Mock)
-        .mockReturnValueOnce('access-token')
-        .mockReturnValueOnce('refresh-token');
-      mockRefreshTokensRepo.deleteExpiredForUser.mockResolvedValue(undefined);
-      mockRefreshTokensRepo.store.mockResolvedValue(undefined);
-      (usersService.updateLastLogin as jest.Mock).mockResolvedValue(undefined);
-
-      await service.login(jwtPayload);
-
-      expect(mockRefreshTokensRepo.deleteExpiredForUser).toHaveBeenCalledWith(jwtPayload.sub);
+    it('usa la vigencia persistente cuando rememberMe está activo', async () => {
+      const result = await service.login(jwtPayload, true);
+      expect(result.rememberMe).toBe(true);
+      expect(result.refreshExpiresAt.getTime()).toBeGreaterThan(Date.now() + 604_000_000);
     });
 
-    it('registra el último acceso del usuario', async () => {
-      (jwtService.sign as jest.Mock)
-        .mockReturnValueOnce('access-token')
-        .mockReturnValueOnce('refresh-token');
-      mockRefreshTokensRepo.deleteExpiredForUser.mockResolvedValue(undefined);
-      mockRefreshTokensRepo.store.mockResolvedValue(undefined);
-      (usersService.updateLastLogin as jest.Mock).mockResolvedValue(undefined);
-
-      await service.login(jwtPayload);
-      expect(usersService.updateLastLogin).toHaveBeenCalledWith(jwtPayload.sub);
+    it('rechaza si el usuario cambió antes de persistir la sesión', async () => {
+      refreshTokensRepo.createSession.mockResolvedValue(false);
+      await expect(service.login(jwtPayload)).rejects.toThrow(UnauthorizedException);
     });
   });
 
-  // ─── refresh ──────────────────────────────────────────────────────────────────
-
   describe('refresh', () => {
-    it('emite un nuevo par de tokens con permisos actualizados', async () => {
-      (jwtService.verify as jest.Mock).mockReturnValue({ sub: 'uuid-user-001', email: 'medico@hospital.org' });
-      mockRefreshTokensRepo.findByHash.mockResolvedValue({ userId: 'uuid-user-001' });
-      (usersService.findByEmailWithPermissions as jest.Mock).mockResolvedValue(mockUser);
-      (jwtService.sign as jest.Mock)
-        .mockReturnValueOnce('new-access-token')
-        .mockReturnValueOnce('new-refresh-token');
-      mockRefreshTokensRepo.rotate.mockResolvedValue(undefined);
+    const expiresAt = new Date(Date.now() + 3_600_000);
 
-      const result = await service.refresh('valid-refresh-token');
-
-      expect(result.access_token).toBe('new-access-token');
-      expect(result.refresh_token).toBe('new-refresh-token');
+    beforeEach(() => {
+      jwtService.verify.mockReturnValue(refreshPayload);
+      refreshTokensRepo.findActiveByHash.mockResolvedValue({
+        userId: mockUser.user.id,
+        sessionVersion: 3,
+        rememberMe: true,
+        expiresAt,
+      });
+      usersService.findByIdWithPermissions.mockResolvedValue(mockUser);
     });
 
-    it('rota el hash en BD (delete + insert atómico)', async () => {
-      (jwtService.verify as jest.Mock).mockReturnValue({ sub: 'uuid-user-001', email: 'medico@hospital.org' });
-      mockRefreshTokensRepo.findByHash.mockResolvedValue({ userId: 'uuid-user-001' });
-      (usersService.findByEmailWithPermissions as jest.Mock).mockResolvedValue(mockUser);
-      (jwtService.sign as jest.Mock)
-        .mockReturnValueOnce('new-access-token')
-        .mockReturnValueOnce('new-refresh-token');
-      mockRefreshTokensRepo.rotate.mockResolvedValue(undefined);
+    it('rota una sola vez, conserva el vencimiento absoluto y emite permisos actuales', async () => {
+      const result = await service.refresh('old-refresh-token');
 
-      await service.refresh('valid-refresh-token');
-
-      expect(mockRefreshTokensRepo.rotate).toHaveBeenCalledWith(
-        expect.any(String),
-        mockUser.user.id,
-        expect.any(String),
+      expect(result.response).not.toHaveProperty('permissions');
+      expect(result.response.access_token).toBe('access-token');
+      expect(result.refreshToken).toBe('refresh-token');
+      expect(result.refreshExpiresAt).toBe(expiresAt);
+      expect(refreshTokensRepo.rotate).toHaveBeenCalledWith(
+        expect.stringMatching(/^[0-9a-f]{64}$/),
+        expect.objectContaining({
+          userId: mockUser.user.id,
+          sessionVersion: 3,
+          rememberMe: true,
+          expiresAt,
+        }),
         expect.any(Date),
       );
     });
 
-    it('lanza UnauthorizedException si el refresh token es inválido (firma mala)', async () => {
-      (jwtService.verify as jest.Mock).mockImplementation(() => { throw new Error('invalid token'); });
+    it('rechaza firma o payload de tipo incorrecto', async () => {
+      jwtService.verify.mockReturnValue({ ...refreshPayload, tokenType: 'access' });
       await expect(service.refresh('bad-token')).rejects.toThrow(UnauthorizedException);
     });
 
-    it('lanza UnauthorizedException si el token fue revocado (no está en BD)', async () => {
-      (jwtService.verify as jest.Mock).mockReturnValue({ sub: 'uuid-user-001', email: 'medico@hospital.org' });
-      mockRefreshTokensRepo.findByHash.mockResolvedValue(null);
-
+    it('rechaza token ausente, vencido o ya consumido en BD', async () => {
+      refreshTokensRepo.findActiveByHash.mockResolvedValue(null);
       await expect(service.refresh('revoked-token')).rejects.toThrow(UnauthorizedException);
     });
 
-    it('lanza UnauthorizedException si el usuario ya no está disponible', async () => {
-      (jwtService.verify as jest.Mock).mockReturnValue({ sub: 'uuid-user-001', email: 'medico@hospital.org' });
-      mockRefreshTokensRepo.findByHash.mockResolvedValue({ userId: 'uuid-user-001' });
-      (usersService.findByEmailWithPermissions as jest.Mock).mockResolvedValue(null);
+    it('rechaza si la versión almacenada no coincide con el JWT', async () => {
+      refreshTokensRepo.findActiveByHash.mockResolvedValue({
+        userId: mockUser.user.id,
+        sessionVersion: 4,
+        rememberMe: false,
+        expiresAt,
+      });
+      await expect(service.refresh('stale-token')).rejects.toThrow(UnauthorizedException);
+    });
 
-      await expect(service.refresh('valid-token')).rejects.toThrow(UnauthorizedException);
+    it('rechaza usuario inactivo o cuya sesión fue invalidada', async () => {
+      usersService.findByIdWithPermissions.mockResolvedValue({
+        ...mockUser,
+        user: { ...mockUser.user, sessionVersion: 4 },
+      });
+      await expect(service.refresh('stale-token')).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('rechaza un replay si la rotación atómica no consume el hash', async () => {
+      refreshTokensRepo.rotate.mockResolvedValue(false);
+      await expect(service.refresh('replayed-token')).rejects.toThrow(UnauthorizedException);
     });
   });
 
-  // ─── logout ───────────────────────────────────────────────────────────────────
-
-  describe('logout', () => {
-    it('elimina el hash del refresh token de la BD', async () => {
-      mockRefreshTokensRepo.deleteByHash.mockResolvedValue(undefined);
-
-      await service.logout('some-refresh-token');
-
-      expect(mockRefreshTokensRepo.deleteByHash).toHaveBeenCalledWith(expect.any(String));
-      // Verifica que el hash enviado no es el token en claro
-      const deletedHash = mockRefreshTokensRepo.deleteByHash.mock.calls[0][0] as string;
-      expect(deletedHash).not.toBe('some-refresh-token');
-      expect(deletedHash).toHaveLength(64);
+  describe('validateAccessToken', () => {
+    it('no confía en permisos del JWT y devuelve permisos actuales', async () => {
+      usersService.findByIdWithPermissions.mockResolvedValue({
+        ...mockUser,
+        permissionKeys: ['patients.read'],
+      });
+      const result = await service.validateAccessToken({
+        ...jwtPayload,
+        permissions: ['admin.users.manage'],
+      });
+      expect(result.permissions).toEqual(['patients.read']);
     });
 
-    it('es idempotente: no lanza si el token ya fue revocado', async () => {
-      mockRefreshTokensRepo.deleteByHash.mockResolvedValue(undefined);
-      await expect(service.logout('already-revoked-token')).resolves.toBeUndefined();
+    it('revoca inmediatamente access tokens de otra versión', async () => {
+      usersService.findByIdWithPermissions.mockResolvedValue({
+        ...mockUser,
+        user: { ...mockUser.user, sessionVersion: 4 },
+      });
+      await expect(service.validateAccessToken(jwtPayload)).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('rechaza un refresh token presentado como access token', async () => {
+      await expect(service.validateAccessToken(refreshPayload)).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+  });
+
+  describe('logout', () => {
+    it('elimina por hash sin persistir ni comparar el token en claro', async () => {
+      await service.logout('some-refresh-token');
+      const deletedHash = refreshTokensRepo.deleteByHash.mock.calls[0][0];
+      expect(deletedHash).not.toBe('some-refresh-token');
+      expect(deletedHash).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it('es idempotente sin cookie', async () => {
+      await expect(service.logout(null)).resolves.toBeUndefined();
+      expect(refreshTokensRepo.deleteByHash).not.toHaveBeenCalled();
     });
   });
 });

@@ -87,14 +87,53 @@ export class UsersRepository {
     return this.prisma.user.update({ where: { id }, data, ...withRoles });
   }
 
+  async updateAndRevokeSessions(
+    id: string,
+    data: Prisma.UserUpdateInput,
+  ): Promise<UserWithRoles> {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const user = await tx.user.update({
+          where: { id },
+          data: { ...data, sessionVersion: { increment: 1 } },
+          ...withRoles,
+        });
+        await tx.refreshToken.deleteMany({ where: { userId: id } });
+        return user;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
   async deactivate(id: string): Promise<UserWithRoles> {
-    return this.prisma.user.update({ where: { id }, data: { isActive: false }, ...withRoles });
+    return this.prisma.$transaction(
+      async (tx) => {
+        const user = await tx.user.update({
+          where: { id },
+          data: { isActive: false, sessionVersion: { increment: 1 } },
+          ...withRoles,
+        });
+        await tx.refreshToken.deleteMany({ where: { userId: id } });
+        return user;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   async assignRole(userId: string, roleId: string): Promise<UserWithRoles> {
-    await this.prisma.userRole.deleteMany({ where: { userId } });
-    await this.prisma.userRole.create({ data: { userId, roleId } });
-    return this.prisma.user.findUniqueOrThrow({ where: { id: userId }, ...withRoles });
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.userRole.deleteMany({ where: { userId } });
+        await tx.userRole.create({ data: { userId, roleId } });
+        await tx.user.update({
+          where: { id: userId },
+          data: { sessionVersion: { increment: 1 } },
+        });
+        await tx.refreshToken.deleteMany({ where: { userId } });
+        return tx.user.findUniqueOrThrow({ where: { id: userId }, ...withRoles });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   async findRoleByKey(key: string) {
@@ -105,6 +144,13 @@ export class UsersRepository {
   async findByEmailWithPermissions(email: string): Promise<UserWithPermissions | null> {
     return this.prisma.user.findUnique({
       where: { email },
+      ...userWithPermissionsArgs,
+    });
+  }
+
+  async findByIdWithPermissions(id: string): Promise<UserWithPermissions | null> {
+    return this.prisma.user.findUnique({
+      where: { id },
       ...userWithPermissionsArgs,
     });
   }

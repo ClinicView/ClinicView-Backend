@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { REFRESH_COOKIE_NAME } from './modules/auth/refresh-cookie';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -32,6 +33,11 @@ async function bootstrap() {
     )
     .setVersion('0.1.0')
     .addBearerAuth()
+    .addCookieAuth(
+      REFRESH_COOKIE_NAME,
+      { type: 'apiKey', in: 'cookie' },
+      'refresh-cookie',
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);

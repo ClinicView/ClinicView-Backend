@@ -1,7 +1,7 @@
 /** Convierte strings tipo '1d', '15m', '7d' a segundos (número). */
-function durationToSeconds(value: string): number {
+function durationToSeconds(value: string, fallbackSeconds: number): number {
   const match = /^(\d+)(ms|s|m|h|d|w)$/.exec(value);
-  if (!match) return 86400;
+  if (!match) return fallbackSeconds;
   const n = parseInt(match[1], 10);
   const unit = match[2];
   const factor: Record<string, number> = {
@@ -26,10 +26,17 @@ export default () => ({
   },
   jwt: {
     secret: process.env.JWT_SECRET,
-    expiresInSeconds: durationToSeconds(process.env.JWT_EXPIRES_IN ?? '1d'),
+    expiresInSeconds: durationToSeconds(process.env.JWT_EXPIRES_IN ?? '15m', 15 * 60),
   },
   jwtRefresh: {
     secret: process.env.JWT_REFRESH_SECRET,
-    expiresInSeconds: durationToSeconds(process.env.JWT_REFRESH_EXPIRES_IN ?? '7d'),
+    sessionExpiresInSeconds: durationToSeconds(
+      process.env.JWT_REFRESH_SESSION_EXPIRES_IN ?? '1d',
+      24 * 60 * 60,
+    ),
+    expiresInSeconds: durationToSeconds(
+      process.env.JWT_REFRESH_EXPIRES_IN ?? '7d',
+      7 * 24 * 60 * 60,
+    ),
   },
 });

@@ -25,6 +25,7 @@ const makeUser = (overrides: Partial<UserWithRoles> = {}): UserWithRoles => ({
   updatedAt: new Date('2026-01-01'),
   updatedBy: null,
   version: 0,
+  sessionVersion: 0,
   userRoles: [],
   ...overrides,
 });
@@ -50,10 +51,12 @@ describe('UsersService', () => {
             findByUsername: jest.fn(),
             findByDocumentNumber: jest.fn(),
             update: jest.fn(),
+            updateAndRevokeSessions: jest.fn(),
             deactivate: jest.fn(),
             assignRole: jest.fn(),
             findRoleByKey: jest.fn(),
             findByEmailWithPermissions: jest.fn(),
+            findByIdWithPermissions: jest.fn(),
             updateLastLogin: jest.fn(),
             searchActiveProfessionals: jest.fn(),
           } satisfies Record<keyof UsersRepository, jest.Mock>,
@@ -180,11 +183,16 @@ describe('UsersService', () => {
     it('hashea la contraseña cuando se provee una nueva', async () => {
       const dto: UpdateUserDto = { password: 'nueva-pass-segura' };
       repo.findById.mockResolvedValue(mockUser);
-      repo.update.mockResolvedValue(mockUser);
+      repo.updateAndRevokeSessions.mockResolvedValue(mockUser);
 
       await service.update(mockUser.id, dto);
 
       expect(hashing.hash).toHaveBeenCalledWith('nueva-pass-segura');
+      expect(repo.updateAndRevokeSessions).toHaveBeenCalledWith(
+        mockUser.id,
+        expect.objectContaining({ passwordHash: '$2b$12$newhash' }),
+      );
+      expect(repo.update).not.toHaveBeenCalled();
     });
 
     it('lanza NotFoundException si el usuario no existe', async () => {

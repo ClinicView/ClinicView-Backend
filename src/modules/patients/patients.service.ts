@@ -1,11 +1,13 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Patient } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
+import { Patient, PatientRegistrationDraft, Prisma } from '@prisma/client';
 import {
   databaseDateToDateOnly,
   dateOnlyToDatabaseDate,
@@ -15,6 +17,11 @@ import { CreatePatientDto } from './dto/create-patient.dto';
 import { ClinicalHistoryExportResponseDto } from './dto/clinical-history-export-response.dto';
 import { FindPatientsQueryDto } from './dto/find-patients-query.dto';
 import { PatientResponseDto } from './dto/patient-response.dto';
+import {
+  PatientRegistrationDraftPayloadDto,
+  PatientRegistrationDraftResponseDto,
+  UpsertPatientRegistrationDraftDto,
+} from './dto/patient-registration-draft.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 import { PatientsRepository } from './repositories/patients.repository';
 
@@ -25,34 +32,124 @@ export interface PaginatedResponse<T> {
   limit: number;
 }
 
+function isPrismaErrorCode(error: unknown, code: string): boolean {
+  return Boolean(
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    (error as { code?: unknown }).code === code,
+  );
+}
+
 @Injectable()
 export class PatientsService {
   private readonly logger = new Logger(PatientsService.name);
 
-  constructor(private readonly patientsRepository: PatientsRepository) {}
+  constructor(
+    private readonly patientsRepository: PatientsRepository,
+    private readonly configService: ConfigService,
+  ) {}
 
-  async create(dto: CreatePatientDto): Promise<PatientResponseDto> {
-    const existing = await this.patientsRepository.findByDocument(
-      dto.documentType,
-      dto.documentNumber,
-    );
-    if (existing) {
-      throw new ConflictException('Ya existe un paciente con ese tipo y número de documento.');
+  async create(dto: CreatePatientDto, actorId: string): Promise<PatientResponseDto> {
+    this.requireActor(actorId);
+    this.assertDraftIdentityPair(dto.draftId, dto.expectedDraftVersion);
+
+    try {
+      const patient = await this.patientsRepository.create(
+        {
+          documentType: dto.documentType,
+          documentNumber: dto.documentNumber,
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          dateOfBirth: dateOnlyToDatabaseDate(dto.dateOfBirth),
+          sex: dto.sex,
+          phone: dto.phone,
+          email: dto.email,
+          address: dto.address,
+          createdBy: actorId,
+        },
+        dto.draftId !== undefined && dto.expectedDraftVersion !== undefined
+          ? { id: dto.draftId, version: dto.expectedDraftVersion, actorId }
+          : undefined,
+      );
+      if (!patient) {
+        throw new ConflictException(
+          'El borrador cambió o expiró. Recarga el formulario antes de registrar al paciente.',
+        );
+      }
+      return this.toResponse(patient);
+    } catch (error) {
+      if (isPrismaErrorCode(error, 'P2002')) {
+        throw new ConflictException('Ya existe un paciente con ese tipo y número de documento.');
+      }
+      if (isPrismaErrorCode(error, 'P2034')) {
+        throw new ConflictException(
+          'El registro cambió durante la operación. Inténtalo nuevamente.',
+        );
+      }
+      throw error;
     }
+  }
 
-    const patient = await this.patientsRepository.create({
-      documentType: dto.documentType,
-      documentNumber: dto.documentNumber,
-      firstName: dto.firstName,
-      lastName: dto.lastName,
-      dateOfBirth: dateOnlyToDatabaseDate(dto.dateOfBirth),
-      sex: dto.sex,
-      phone: dto.phone,
-      email: dto.email,
-      address: dto.address,
+  async getCurrentRegistrationDraft(
+    actorId: string,
+  ): Promise<PatientRegistrationDraftResponseDto | null> {
+    this.requireActor(actorId);
+    await this.patientsRepository.purgeExpiredRegistrationDrafts();
+    const draft = await this.patientsRepository.findRegistrationDraftByActor(actorId);
+    if (!draft || draft.expiresAt.getTime() <= Date.now()) return null;
+    return this.toDraftResponse(draft);
+  }
+
+  async upsertCurrentRegistrationDraft(
+    dto: UpsertPatientRegistrationDraftDto,
+    actorId: string,
+  ): Promise<PatientRegistrationDraftResponseDto> {
+    this.requireActor(actorId);
+    this.assertDraftIdentityPair(dto.expectedId, dto.expectedVersion);
+    const ttlDays = this.configService.get<number>('patientDraft.ttlDays', 7);
+    const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
+
+    try {
+      const draft = await this.patientsRepository.upsertRegistrationDraft({
+        actorId,
+        expectedId: dto.expectedId,
+        expectedVersion: dto.expectedVersion,
+        payload: this.normalizeDraftPayload(dto.payload),
+        expiresAt,
+      });
+      if (!draft) {
+        throw new ConflictException(
+          'El borrador fue modificado o reemplazado en otra pestaña. Recarga antes de continuar.',
+        );
+      }
+      return this.toDraftResponse(draft);
+    } catch (error) {
+      if (isPrismaErrorCode(error, 'P2002') || isPrismaErrorCode(error, 'P2034')) {
+        throw new ConflictException(
+          'El borrador cambió durante la operación. Recarga antes de continuar.',
+        );
+      }
+      throw error;
+    }
+  }
+
+  async deleteCurrentRegistrationDraft(
+    draftId: string,
+    expectedVersion: number,
+    actorId: string,
+  ): Promise<void> {
+    this.requireActor(actorId);
+    const deleted = await this.patientsRepository.deleteRegistrationDraft({
+      id: draftId,
+      version: expectedVersion,
+      actorId,
     });
-
-    return this.toResponse(patient);
+    if (!deleted) {
+      throw new ConflictException(
+        'El borrador fue modificado o reemplazado en otra pestaña. Recarga antes de eliminarlo.',
+      );
+    }
   }
 
   async stats(): Promise<{
@@ -256,6 +353,37 @@ export class PatientsService {
       isActive: patient.isActive,
       createdAt: patient.createdAt,
       updatedAt: patient.updatedAt,
+    };
+  }
+
+  private requireActor(actorId: string): void {
+    if (!actorId?.trim()) {
+      throw new UnauthorizedException('No se pudo identificar al usuario autenticado.');
+    }
+  }
+
+  private assertDraftIdentityPair(id?: string, version?: number): void {
+    if ((id === undefined) !== (version === undefined)) {
+      throw new BadRequestException(
+        'La identidad y la versión del borrador deben enviarse juntas.',
+      );
+    }
+  }
+
+  private normalizeDraftPayload(
+    payload: PatientRegistrationDraftPayloadDto,
+  ): Prisma.InputJsonObject {
+    return JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonObject;
+  }
+
+  private toDraftResponse(draft: PatientRegistrationDraft): PatientRegistrationDraftResponseDto {
+    return {
+      id: draft.id,
+      payload: JSON.parse(JSON.stringify(draft.payload)) as PatientRegistrationDraftPayloadDto,
+      version: draft.version,
+      expiresAt: draft.expiresAt,
+      createdAt: draft.createdAt,
+      updatedAt: draft.updatedAt,
     };
   }
 }

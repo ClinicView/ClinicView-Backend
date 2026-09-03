@@ -27,6 +27,16 @@ const mockPatientsService = {
   findOne: jest.fn().mockResolvedValue(mockPatient),
   update: jest.fn().mockResolvedValue(mockPatient),
   deactivate: jest.fn().mockResolvedValue({ ...mockPatient, isActive: false }),
+  getCurrentRegistrationDraft: jest.fn().mockResolvedValue(null),
+  upsertCurrentRegistrationDraft: jest.fn().mockResolvedValue({
+    id: '93d89f74-3d39-4ed8-b050-8efab881d16b',
+    payload: { firstName: 'María' },
+    version: 0,
+    expiresAt: new Date('2099-09-10T12:00:00.000Z'),
+    createdAt: new Date('2026-09-03T12:00:00.000Z'),
+    updatedAt: new Date('2026-09-03T12:00:00.000Z'),
+  }),
+  deleteCurrentRegistrationDraft: jest.fn().mockResolvedValue(undefined),
   exportClinicalHistory: jest.fn().mockResolvedValue({
     patient: mockPatient,
     records: [],
@@ -56,9 +66,52 @@ describe('PatientsController', () => {
       dateOfBirth: '1985-06-15',
       sex: Sex.F,
     };
-    const result = await controller.create(dto);
-    expect(mockPatientsService.create).toHaveBeenCalledWith(dto);
+    const request = { user: { sub: 'actor-uuid' } };
+    const result = await controller.create(dto, request);
+    expect(mockPatientsService.create).toHaveBeenCalledWith(dto, 'actor-uuid');
     expect(result.id).toBe(mockPatient.id);
+  });
+
+  it('expone el borrador propio y responde 204 cuando no existe', async () => {
+    const response = { status: jest.fn() };
+    const result = await controller.getCurrentRegistrationDraft(
+      { user: { sub: 'actor-uuid' } },
+      response as never,
+    );
+
+    expect(result).toBeNull();
+    expect(response.status).toHaveBeenCalledWith(204);
+    expect(mockPatientsService.getCurrentRegistrationDraft).toHaveBeenCalledWith('actor-uuid');
+  });
+
+  it('delega guardado y eliminación CAS del borrador', async () => {
+    const request = { user: { sub: 'actor-uuid' } };
+    const dto = { payload: { firstName: 'María' } };
+    await controller.upsertCurrentRegistrationDraft(dto, request);
+    await controller.deleteCurrentRegistrationDraft(
+      { draftId: '93d89f74-3d39-4ed8-b050-8efab881d16b', expectedVersion: 0 },
+      request,
+    );
+
+    expect(mockPatientsService.upsertCurrentRegistrationDraft).toHaveBeenCalledWith(
+      dto,
+      'actor-uuid',
+    );
+    expect(mockPatientsService.deleteCurrentRegistrationDraft).toHaveBeenCalledWith(
+      '93d89f74-3d39-4ed8-b050-8efab881d16b',
+      0,
+      'actor-uuid',
+    );
+  });
+
+  it('protege las tres rutas del borrador con patients.create', () => {
+    for (const method of [
+      PatientsController.prototype.getCurrentRegistrationDraft,
+      PatientsController.prototype.upsertCurrentRegistrationDraft,
+      PatientsController.prototype.deleteCurrentRegistrationDraft,
+    ]) {
+      expect(Reflect.getMetadata(PERMISSIONS_KEY, method)).toEqual(['patients.create']);
+    }
   });
 
   it('findAll devuelve paginación', async () => {

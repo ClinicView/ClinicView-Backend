@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   HttpCode,
@@ -9,10 +10,13 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Request,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   ApiBearerAuth,
   ApiConflictResponse,
@@ -29,6 +33,11 @@ import { CreatePatientDto } from './dto/create-patient.dto';
 import { ClinicalHistoryExportResponseDto } from './dto/clinical-history-export-response.dto';
 import { FindPatientsQueryDto } from './dto/find-patients-query.dto';
 import { PatientResponseDto } from './dto/patient-response.dto';
+import {
+  DeletePatientRegistrationDraftQueryDto,
+  PatientRegistrationDraftResponseDto,
+  UpsertPatientRegistrationDraftDto,
+} from './dto/patient-registration-draft.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 import { PaginatedResponse, PatientsService } from './patients.service';
 
@@ -48,8 +57,56 @@ export class PatientsController {
   @ApiOperation({ summary: 'Registrar nuevo paciente' })
   @ApiResponse({ status: 201, type: PatientResponseDto })
   @ApiConflictResponse({ description: 'Ya existe un paciente con ese tipo y número de documento.' })
-  create(@Body() dto: CreatePatientDto): Promise<PatientResponseDto> {
-    return this.patientsService.create(dto);
+  create(
+    @Body() dto: CreatePatientDto,
+    @Request() request: AuthRequest,
+  ): Promise<PatientResponseDto> {
+    return this.patientsService.create(dto, request.user.sub);
+  }
+
+  @Get('draft/current')
+  @RequirePermissions('patients.create')
+  @Header('Cache-Control', 'private, no-store, max-age=0')
+  @Header('Pragma', 'no-cache')
+  @ApiOperation({ summary: 'Obtener el borrador privado vigente del alta de paciente' })
+  @ApiResponse({ status: 200, type: PatientRegistrationDraftResponseDto })
+  @ApiResponse({ status: 204, description: 'No existe un borrador vigente.' })
+  async getCurrentRegistrationDraft(
+    @Request() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<PatientRegistrationDraftResponseDto | null> {
+    const draft = await this.patientsService.getCurrentRegistrationDraft(request.user.sub);
+    if (!draft) response.status(HttpStatus.NO_CONTENT);
+    return draft;
+  }
+
+  @Put('draft/current')
+  @RequirePermissions('patients.create')
+  @ApiOperation({ summary: 'Crear o reemplazar mediante CAS el borrador privado del alta' })
+  @ApiResponse({ status: 200, type: PatientRegistrationDraftResponseDto })
+  @ApiConflictResponse({ description: 'El borrador cambió, expiró o fue reemplazado.' })
+  upsertCurrentRegistrationDraft(
+    @Body() dto: UpsertPatientRegistrationDraftDto,
+    @Request() request: AuthRequest,
+  ): Promise<PatientRegistrationDraftResponseDto> {
+    return this.patientsService.upsertCurrentRegistrationDraft(dto, request.user.sub);
+  }
+
+  @Delete('draft/current')
+  @RequirePermissions('patients.create')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Eliminar mediante CAS el borrador privado del alta' })
+  @ApiResponse({ status: 204 })
+  @ApiConflictResponse({ description: 'El borrador cambió o fue reemplazado.' })
+  async deleteCurrentRegistrationDraft(
+    @Query() query: DeletePatientRegistrationDraftQueryDto,
+    @Request() request: AuthRequest,
+  ): Promise<void> {
+    await this.patientsService.deleteCurrentRegistrationDraft(
+      query.draftId,
+      query.expectedVersion,
+      request.user.sub,
+    );
   }
 
   @Get()
@@ -58,15 +115,15 @@ export class PatientsController {
     summary: 'Listar pacientes activos — con búsqueda por nombre/documento y paginación',
   })
   @ApiResponse({ status: 200 })
-  findAll(
-    @Query() query: FindPatientsQueryDto,
-  ): Promise<PaginatedResponse<PatientResponseDto>> {
+  findAll(@Query() query: FindPatientsQueryDto): Promise<PaginatedResponse<PatientResponseDto>> {
     return this.patientsService.findAll(query);
   }
 
   @Get('stats')
   @RequirePermissions('patients.read')
-  @ApiOperation({ summary: 'Indicadores de la lista de pacientes (total, activos, nuevos, con documentos)' })
+  @ApiOperation({
+    summary: 'Indicadores de la lista de pacientes (total, activos, nuevos, con documentos)',
+  })
   stats() {
     return this.patientsService.stats();
   }

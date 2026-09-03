@@ -5,9 +5,24 @@ function durationToSeconds(value: string, fallbackSeconds: number): number {
   const n = parseInt(match[1], 10);
   const unit = match[2];
   const factor: Record<string, number> = {
-    ms: 0.001, s: 1, m: 60, h: 3600, d: 86400, w: 604800,
+    ms: 0.001,
+    s: 1,
+    m: 60,
+    h: 3600,
+    d: 86400,
+    w: 604800,
   };
   return Math.round(n * factor[unit]);
+}
+
+function boundedInteger(
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
 }
 
 export default () => ({
@@ -37,6 +52,15 @@ export default () => ({
     expiresInSeconds: durationToSeconds(
       process.env.JWT_REFRESH_EXPIRES_IN ?? '7d',
       7 * 24 * 60 * 60,
+    ),
+  },
+  patientDraft: {
+    ttlDays: boundedInteger(process.env.PATIENT_DRAFT_TTL_DAYS, 7, 1, 30),
+    cleanupIntervalMinutes: boundedInteger(
+      process.env.PATIENT_DRAFT_CLEANUP_INTERVAL_MINUTES,
+      60,
+      5,
+      1440,
     ),
   },
 });

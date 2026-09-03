@@ -1,12 +1,15 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DocumentType, Sex } from '@prisma/client';
 import {
   IsEmail,
   IsEnum,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   MaxLength,
+  Min,
+  IsUUID,
 } from 'class-validator';
 import { IsPastOrPresentClinicalDate } from '../../../common/validation/clinical-date';
 
@@ -62,4 +65,22 @@ export class CreatePatientDto {
   @IsString()
   @MaxLength(255)
   address?: string;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'uuid',
+    description: 'Borrador privado que se consumirá atómicamente con el alta.',
+  })
+  @IsOptional()
+  @IsUUID()
+  draftId?: string;
+
+  @ApiPropertyOptional({
+    minimum: 0,
+    description: 'Versión observada del borrador que se consumirá.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  expectedDraftVersion?: number;
 }

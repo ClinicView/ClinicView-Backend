@@ -92,6 +92,7 @@ model User {
   notifications                    Notification[]
   professionalRecords              ClinicalRecord[]           @relation("ClinicalRecordProfessional")
   clinicalRecordDrafts             ClinicalRecordDraft[]      @relation("ClinicalRecordDraftActor")
+  patientRegistrationDraft         PatientRegistrationDraft?  @relation("PatientRegistrationDraftActor")
   uploadedClinicalMedia            ClinicalMediaAsset[]       @relation("ClinicalMediaUploader")
   createdClinicalRecordAttachments ClinicalRecordAttachment[] @relation("ClinicalRecordAttachmentCreator")
 
@@ -212,6 +213,23 @@ model Patient {
 
   @@unique([documentType, documentNumber])
   @@map("patients")
+}
+
+// Borrador privado del alta de paciente. Hay uno por usuario y expira para
+// evitar conservar datos personales temporales de forma indefinida.
+model PatientRegistrationDraft {
+  id        String   @id @default(uuid()) @db.Uuid
+  actorId   String   @unique @map("actor_id") @db.Uuid
+  payload   Json     @default("{}")
+  version   Int      @default(0)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  actor User @relation("PatientRegistrationDraftActor", fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("patient_registration_drafts")
 }
 
 // ─── Historias clínicas ───────────────────────────────────────────────────────

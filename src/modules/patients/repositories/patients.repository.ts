@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { DocumentType, Patient, Prisma } from '@prisma/client';
+import { DocumentType, Patient, PatientRegistrationDraft, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
 
 const clinicalHistoryExportArgs = {
@@ -116,12 +116,125 @@ export interface PaginatedPatients {
   total: number;
 }
 
+export interface PatientRegistrationDraftIdentity {
+  id: string;
+  version: number;
+  actorId: string;
+}
+
+export interface UpsertPatientRegistrationDraftInput {
+  actorId: string;
+  expectedId?: string;
+  expectedVersion?: number;
+  payload: Prisma.InputJsonObject;
+  expiresAt: Date;
+}
+
 @Injectable()
 export class PatientsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(data: Prisma.PatientCreateInput): Promise<Patient> {
-    return this.prisma.patient.create({ data });
+  async create(
+    data: Prisma.PatientUncheckedCreateInput,
+    draft?: PatientRegistrationDraftIdentity,
+  ): Promise<Patient | null> {
+    if (!draft) return this.prisma.patient.create({ data });
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        const consumed = await tx.patientRegistrationDraft.deleteMany({
+          where: {
+            id: draft.id,
+            actorId: draft.actorId,
+            version: draft.version,
+            expiresAt: { gt: new Date() },
+          },
+        });
+        if (consumed.count !== 1) return null;
+        return tx.patient.create({ data });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  async findRegistrationDraftByActor(actorId: string): Promise<PatientRegistrationDraft | null> {
+    return this.prisma.patientRegistrationDraft.findUnique({ where: { actorId } });
+  }
+
+  async upsertRegistrationDraft(
+    input: UpsertPatientRegistrationDraftInput,
+  ): Promise<PatientRegistrationDraft | null> {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const now = new Date();
+        await tx.patientRegistrationDraft.deleteMany({ where: { expiresAt: { lte: now } } });
+        const current = await tx.patientRegistrationDraft.findUnique({
+          where: { actorId: input.actorId },
+        });
+
+        if (!current) {
+          if (input.expectedId !== undefined || input.expectedVersion !== undefined) return null;
+          return tx.patientRegistrationDraft.create({
+            data: {
+              actorId: input.actorId,
+              payload: input.payload,
+              expiresAt: input.expiresAt,
+            },
+          });
+        }
+
+        if (input.expectedId !== current.id || input.expectedVersion !== current.version) {
+          return null;
+        }
+
+        const updated = await tx.patientRegistrationDraft.updateMany({
+          where: {
+            id: current.id,
+            actorId: input.actorId,
+            version: input.expectedVersion,
+            expiresAt: { gt: now },
+          },
+          data: {
+            payload: input.payload,
+            expiresAt: input.expiresAt,
+            version: { increment: 1 },
+          },
+        });
+        if (updated.count !== 1) return null;
+        return tx.patientRegistrationDraft.findUnique({ where: { id: current.id } });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  async deleteRegistrationDraft(identity: PatientRegistrationDraftIdentity): Promise<boolean> {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const now = new Date();
+        await tx.patientRegistrationDraft.deleteMany({ where: { expiresAt: { lte: now } } });
+        const deleted = await tx.patientRegistrationDraft.deleteMany({
+          where: {
+            id: identity.id,
+            actorId: identity.actorId,
+            version: identity.version,
+          },
+        });
+        if (deleted.count === 1) return true;
+        const current = await tx.patientRegistrationDraft.findUnique({
+          where: { actorId: identity.actorId },
+          select: { id: true },
+        });
+        return current === null;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  async purgeExpiredRegistrationDrafts(now = new Date()): Promise<number> {
+    const result = await this.prisma.patientRegistrationDraft.deleteMany({
+      where: { expiresAt: { lte: now } },
+    });
+    return result.count;
   }
 
   async findMany(options: FindManyOptions): Promise<PaginatedPatients> {

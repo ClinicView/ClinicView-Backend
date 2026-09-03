@@ -1,6 +1,12 @@
-import { ConflictException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
-import { DocumentType, Patient, Sex } from '@prisma/client';
+import { DocumentType, Patient, PatientRegistrationDraft, Sex } from '@prisma/client';
 import { CreatePatientDto } from '../dto/create-patient.dto';
 import { UpdatePatientDto } from '../dto/update-patient.dto';
 import { PatientsRepository } from '../repositories/patients.repository';
@@ -25,6 +31,16 @@ const mockPatient: Patient = {
   version: 0,
 };
 
+const mockDraft: PatientRegistrationDraft = {
+  id: '93d89f74-3d39-4ed8-b050-8efab881d16b',
+  actorId: 'actor-uuid',
+  payload: { firstName: 'María' },
+  version: 2,
+  expiresAt: new Date('2099-09-10T12:00:00.000Z'),
+  createdAt: new Date('2026-09-03T12:00:00.000Z'),
+  updatedAt: new Date('2026-09-03T12:05:00.000Z'),
+};
+
 describe('PatientsService', () => {
   let service: PatientsService;
   let repo: jest.Mocked<PatientsRepository>;
@@ -43,7 +59,16 @@ describe('PatientsService', () => {
             findByDocument: jest.fn(),
             update: jest.fn(),
             deactivate: jest.fn(),
+            activate: jest.fn(),
+            findRegistrationDraftByActor: jest.fn(),
+            upsertRegistrationDraft: jest.fn(),
+            deleteRegistrationDraft: jest.fn(),
+            purgeExpiredRegistrationDrafts: jest.fn(),
           },
+        },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn().mockReturnValue(7) },
         },
       ],
     }).compile();
@@ -65,25 +90,131 @@ describe('PatientsService', () => {
     };
 
     it('crea el paciente cuando el documento no existe', async () => {
-      repo.findByDocument.mockResolvedValue(null);
       repo.create.mockResolvedValue(mockPatient);
 
-      const result = await service.create(dto);
+      const result = await service.create(dto, 'actor-uuid');
 
-      expect(repo.findByDocument).toHaveBeenCalledWith(dto.documentType, dto.documentNumber);
-      expect(repo.create).toHaveBeenCalled();
+      expect(repo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ createdBy: 'actor-uuid' }),
+        undefined,
+      );
       expect(result.id).toBe(mockPatient.id);
       expect(result.dateOfBirth).toBe('1985-06-15');
     });
 
-    it('lanza ConflictException si el documento ya existe', async () => {
-      repo.findByDocument.mockResolvedValue(mockPatient);
-      await expect(service.create(dto)).rejects.toThrow(ConflictException);
+    it('consume el borrador por identidad y versión en la misma creación', async () => {
+      repo.create.mockResolvedValue(mockPatient);
+      await service.create(
+        { ...dto, draftId: mockDraft.id, expectedDraftVersion: mockDraft.version },
+        'actor-uuid',
+      );
+
+      expect(repo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ createdBy: 'actor-uuid' }),
+        { id: mockDraft.id, version: mockDraft.version, actorId: 'actor-uuid' },
+      );
     });
 
-    it('no expone datos PII en la excepción de conflicto', async () => {
-      repo.findByDocument.mockResolvedValue(mockPatient);
-      await expect(service.create(dto)).rejects.toThrow('documento');
+    it('rechaza referencias incompletas al borrador', async () => {
+      await expect(service.create({ ...dto, draftId: mockDraft.id }, 'actor-uuid')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(repo.create).not.toHaveBeenCalled();
+    });
+
+    it('convierte una carrera P2002 en conflicto genérico sin PII', async () => {
+      repo.create.mockRejectedValue({ code: 'P2002' });
+      await expect(service.create(dto, 'actor-uuid')).rejects.toThrow(
+        'Ya existe un paciente con ese tipo y número de documento.',
+      );
+    });
+
+    it('rechaza el alta si el borrador no se pudo consumir', async () => {
+      repo.create.mockResolvedValue(null);
+      await expect(
+        service.create(
+          { ...dto, draftId: mockDraft.id, expectedDraftVersion: mockDraft.version },
+          'actor-uuid',
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('exige actor autenticado', async () => {
+      await expect(service.create(dto, '')).rejects.toThrow(UnauthorizedException);
+      expect(repo.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('registration draft', () => {
+    it('devuelve solo el borrador vigente del actor sin exponer actorId', async () => {
+      repo.purgeExpiredRegistrationDrafts.mockResolvedValue(0);
+      repo.findRegistrationDraftByActor.mockResolvedValue(mockDraft);
+
+      const result = await service.getCurrentRegistrationDraft('actor-uuid');
+
+      expect(repo.findRegistrationDraftByActor).toHaveBeenCalledWith('actor-uuid');
+      expect(result).toEqual(
+        expect.objectContaining({ id: mockDraft.id, version: mockDraft.version }),
+      );
+      expect(result).not.toHaveProperty('actorId');
+    });
+
+    it('crea un borrador y renueva su TTL a siete días', async () => {
+      repo.upsertRegistrationDraft.mockResolvedValue(mockDraft);
+      const before = Date.now();
+
+      const result = await service.upsertCurrentRegistrationDraft(
+        { payload: { firstName: 'María' } },
+        'actor-uuid',
+      );
+
+      expect(result.id).toBe(mockDraft.id);
+      expect(repo.upsertRegistrationDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorId: 'actor-uuid',
+          expectedId: undefined,
+          expectedVersion: undefined,
+          payload: { firstName: 'María' },
+          expiresAt: expect.any(Date),
+        }),
+      );
+      const input = repo.upsertRegistrationDraft.mock.calls[0][0];
+      expect(input.expiresAt.getTime()).toBeGreaterThanOrEqual(before + 7 * 86400000);
+    });
+
+    it('exige ID y versión juntos también al actualizar', async () => {
+      await expect(
+        service.upsertCurrentRegistrationDraft(
+          { expectedId: mockDraft.id, payload: {} },
+          'actor-uuid',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('informa conflicto de versión o ABA sin sobrescribir', async () => {
+      repo.upsertRegistrationDraft.mockResolvedValue(null);
+      await expect(
+        service.upsertCurrentRegistrationDraft(
+          {
+            expectedId: mockDraft.id,
+            expectedVersion: mockDraft.version,
+            payload: { lastName: 'García' },
+          },
+          'actor-uuid',
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('elimina mediante CAS y rechaza una identidad que cambió', async () => {
+      repo.deleteRegistrationDraft.mockResolvedValue(false);
+      await expect(
+        service.deleteCurrentRegistrationDraft(mockDraft.id, 1, 'actor-uuid'),
+      ).rejects.toThrow(ConflictException);
+      expect(repo.deleteRegistrationDraft).toHaveBeenCalledWith({
+        id: mockDraft.id,
+        version: 1,
+        actorId: 'actor-uuid',
+      });
     });
   });
 

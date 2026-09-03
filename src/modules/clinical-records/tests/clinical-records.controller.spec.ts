@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { RecordOrigin, RecordStatus, RecordType } from '@prisma/client';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../../core/rbac/permissions.guard';
 import { ClinicalRecordsController } from '../clinical-records.controller';
@@ -31,6 +32,7 @@ const makeResponse = (overrides: Record<string, unknown> = {}) => ({
   createdBy: 'user-uuid',
   updatedAt: new Date(),
   version: 0,
+  attachments: [],
   ...overrides,
 });
 
@@ -64,6 +66,7 @@ describe('ClinicalRecordsController', () => {
   });
 
   const req = { user: { sub: 'user-uuid' } };
+  const httpResponse = { status: jest.fn() } as unknown as Response;
 
   describe('create', () => {
     it('crea y devuelve el registro', async () => {
@@ -102,8 +105,20 @@ describe('ClinicalRecordsController', () => {
         updatedAt: new Date(),
       };
       mockService.getCurrentDraft.mockResolvedValue(draft);
-      await expect(controller.getCurrentDraft('patient-uuid', req)).resolves.toBe(draft);
+      await expect(controller.getCurrentDraft('patient-uuid', req, httpResponse)).resolves.toBe(
+        draft,
+      );
       expect(mockService.getCurrentDraft).toHaveBeenCalledWith('patient-uuid', 'user-uuid');
+      expect(httpResponse.status).not.toHaveBeenCalled();
+    });
+
+    it('responde 204 cuando el actor no tiene borrador vigente', async () => {
+      mockService.getCurrentDraft.mockResolvedValue(null);
+
+      await expect(
+        controller.getCurrentDraft('patient-uuid', req, httpResponse),
+      ).resolves.toBeNull();
+      expect(httpResponse.status).toHaveBeenCalledWith(204);
     });
 
     it('crea o actualiza el borrador', async () => {

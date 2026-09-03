@@ -7,6 +7,7 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import { Prisma, RecordOrigin, RecordStatus, RecordType } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
+import { ClinicalRecordMediaService } from '../clinical-record-media.service';
 import { ClinicalRecordsService } from '../clinical-records.service';
 import { ClinicalRecordsRepository } from '../repositories/clinical-records.repository';
 
@@ -42,6 +43,7 @@ const makeRecord = (overrides: Record<string, unknown> = {}) => ({
   updatedBy: null,
   version: 0,
   _count: { corrections: 0 },
+  attachments: [],
   ...overrides,
 });
 
@@ -81,6 +83,13 @@ const mockPrisma = {
   $transaction: jest.fn(),
 } as unknown as PrismaService;
 
+const mockMedia = {
+  bindAttachments: jest.fn(),
+  logBoundAttachments: jest.fn(),
+  validateDraftAttachments: jest.fn(),
+  toAssetResponse: jest.fn(),
+};
+
 describe('ClinicalRecordsService', () => {
   let service: ClinicalRecordsService;
 
@@ -90,6 +99,7 @@ describe('ClinicalRecordsService', () => {
         ClinicalRecordsService,
         { provide: ClinicalRecordsRepository, useValue: mockRepo },
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: ClinicalRecordMediaService, useValue: mockMedia },
       ],
     }).compile();
 
@@ -104,6 +114,12 @@ describe('ClinicalRecordsService', () => {
       fullName: 'Dra. Elena Rivera',
       isActive: true,
     });
+    mockRepo.findByIdAndPatient.mockResolvedValue(makeRecord());
+    mockMedia.bindAttachments.mockResolvedValue({ count: 0, assetIds: [] });
+    mockMedia.validateDraftAttachments.mockImplementation(
+      async (_patientId: string, _actorId: string, attachments: unknown[] | undefined) =>
+        attachments ?? [],
+    );
   });
 
   describe('create', () => {
@@ -249,6 +265,38 @@ describe('ClinicalRecordsService', () => {
         ),
       ).rejects.toThrow(ConflictException);
     });
+
+    it('enlaza adjuntos dentro de la misma transacción y no consume el draft si falla', async () => {
+      const attachment = { assetId: '40000000-0000-4000-8000-000000000001' };
+      mockRepo.createInTransaction.mockResolvedValue(makeRecord());
+      mockMedia.bindAttachments.mockRejectedValueOnce(new ConflictException('asset expired'));
+
+      await expect(
+        service.create(
+          'patient-uuid',
+          {
+            recordType: RecordType.CONSULTATION,
+            attendedAt: '2026-06-01T10:00:00Z',
+            summary: 'Control.',
+            details: consultationDetails,
+            attachments: [attachment],
+            draftId: '20000000-0000-4000-8000-000000000001',
+          },
+          'user-uuid',
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(mockMedia.bindAttachments).toHaveBeenCalledWith(
+        'patient-uuid',
+        'record-uuid',
+        'user-uuid',
+        [attachment],
+        expect.any(Set),
+        mockTx,
+      );
+      expect(mockRepo.deleteDraftByIdForActor).not.toHaveBeenCalled();
+      expect(mockMedia.logBoundAttachments).not.toHaveBeenCalled();
+    });
   });
 
   describe('reads', () => {
@@ -298,7 +346,7 @@ describe('ClinicalRecordsService', () => {
           complications: 'Sin complicaciones.',
         },
       });
-      mockRepo.findByIdAndPatient.mockResolvedValue(original);
+      mockRepo.findByIdAndPatient.mockResolvedValueOnce(original).mockResolvedValueOnce(corrected);
       mockRepo.markCorrected.mockResolvedValue(true);
       mockRepo.createInTransaction.mockResolvedValue(corrected);
 
@@ -346,7 +394,9 @@ describe('ClinicalRecordsService', () => {
 
     it('permite corregir un registro histórico details={} heredándolo', async () => {
       const original = makeRecord({ details: {}, version: 2 });
-      mockRepo.findByIdAndPatient.mockResolvedValue(original);
+      mockRepo.findByIdAndPatient
+        .mockResolvedValueOnce(original)
+        .mockResolvedValueOnce(makeRecord({ id: 'new-id', details: {} }));
       mockRepo.markCorrected.mockResolvedValue(true);
       mockRepo.createInTransaction.mockResolvedValue(makeRecord({ id: 'new-id', details: {} }));
 
@@ -360,6 +410,56 @@ describe('ClinicalRecordsService', () => {
       expect(mockRepo.createInTransaction).toHaveBeenCalledWith(
         expect.objectContaining({ details: {}, recordType: RecordType.CONSULTATION }),
         mockTx,
+      );
+    });
+
+    it('hereda y reutiliza assets del registro original sin duplicar el binario', async () => {
+      const originalAttachment = {
+        id: 'attachment-old',
+        assetId: '40000000-0000-4000-8000-000000000001',
+        sectionKey: 'physicalExam',
+        caption: 'Vista original',
+        altText: 'Lesión frontal',
+        sortOrder: 2,
+        createdBy: 'user-uuid',
+        createdAt: new Date(),
+        asset: { id: '40000000-0000-4000-8000-000000000001' },
+      };
+      const original = makeRecord({ version: 1, attachments: [originalAttachment] });
+      const corrected = makeRecord({ id: 'new-record-id', attachments: [originalAttachment] });
+      mockRepo.findByIdAndPatient.mockResolvedValueOnce(original).mockResolvedValueOnce(corrected);
+      mockRepo.markCorrected.mockResolvedValue(true);
+      mockRepo.createInTransaction.mockResolvedValue(corrected);
+      mockMedia.bindAttachments.mockResolvedValue({
+        count: 1,
+        assetIds: [originalAttachment.assetId],
+      });
+
+      await service.correct(
+        'patient-uuid',
+        'record-uuid',
+        { expectedVersion: 1, summary: 'Corrección con imagen.' },
+        'user-uuid',
+      );
+
+      const call = mockMedia.bindAttachments.mock.calls[0];
+      expect(call?.[3]).toEqual([
+        {
+          assetId: originalAttachment.assetId,
+          sectionKey: 'physicalExam',
+          caption: 'Vista original',
+          altText: 'Lesión frontal',
+          sortOrder: 2,
+        },
+      ]);
+      expect(call?.[4]).toBeInstanceOf(Set);
+      expect((call?.[4] as Set<string>).has(originalAttachment.assetId)).toBe(true);
+      expect(call?.[5]).toBe(mockTx);
+      expect(mockMedia.logBoundAttachments).toHaveBeenCalledWith(
+        'user-uuid',
+        'patient-uuid',
+        'new-record-id',
+        expect.objectContaining({ count: 1 }),
       );
     });
 
@@ -512,6 +612,33 @@ describe('ClinicalRecordsService', () => {
         mockTx,
       );
       expect(result.version).toBe(0);
+    });
+
+    it('valida refs del borrador y renueva sus assets al mismo TTL', async () => {
+      const attachments = [{ assetId: '40000000-0000-4000-8000-000000000001', caption: 'Control' }];
+      mockRepo.findDraftByActorAndPatient.mockResolvedValue(null);
+      mockRepo.createDraft.mockImplementation(async (data: Record<string, unknown>) =>
+        makeDraft({ ...data, version: 0 }),
+      );
+      mockMedia.validateDraftAttachments.mockResolvedValue(attachments);
+
+      await service.upsertCurrentDraft('patient-uuid', { payload: { attachments } }, 'user-uuid');
+
+      expect(mockMedia.validateDraftAttachments).toHaveBeenCalledWith(
+        'patient-uuid',
+        'user-uuid',
+        attachments,
+        expect.any(Date),
+        mockTx,
+      );
+      const expiresAt = mockMedia.validateDraftAttachments.mock.calls[0]?.[3] as Date;
+      expect(mockRepo.createDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresAt,
+          payload: expect.objectContaining({ attachments }),
+        }),
+        mockTx,
+      );
     });
 
     it('exige expectedVersion y actualiza el borrador con CAS', async () => {

@@ -15,33 +15,38 @@ datasource db {
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
 enum RecordType {
-  CONSULTATION  // Consulta / atención clínica
-  LAB_RESULT    // Resultado de laboratorio
-  PRESCRIPTION  // Prescripción / receta
-  THERAPY_NOTE  // Nota de terapia
-  EVOLUTION     // Nota de evolución / seguimiento
-  PROCEDURE     // Procedimiento realizado
+  CONSULTATION // Consulta / atención clínica
+  LAB_RESULT // Resultado de laboratorio
+  PRESCRIPTION // Prescripción / receta
+  THERAPY_NOTE // Nota de terapia
+  EVOLUTION // Nota de evolución / seguimiento
+  PROCEDURE // Procedimiento realizado
   OTHER
 }
 
 enum RecordOrigin {
-  MANUAL     // Ingreso manual por el profesional
-  DIGITIZED  // Extraído de documento digitalizado
+  MANUAL // Ingreso manual por el profesional
+  DIGITIZED // Extraído de documento digitalizado
 }
 
 enum RecordStatus {
-  ACTIVE     // Estado normal
-  CORRECTED  // Reemplazado por una corrección posterior
-  VOIDED     // Anulado (con razón documentada)
+  ACTIVE // Estado normal
+  CORRECTED // Reemplazado por una corrección posterior
+  VOIDED // Anulado (con razón documentada)
+}
+
+enum ClinicalMediaStatus {
+  TEMPORARY
+  ATTACHED
 }
 
 enum DocumentStatus {
-  PENDING     // Recién subido, pendiente de procesamiento
-  PROCESSING  // En proceso de OCR/NER
-  PROCESSED   // OCR/NER completado, listo para revisión
-  FAILED      // Error en procesamiento
-  VALIDATED   // Aprobado por revisor clínico
-  REJECTED    // Rechazado por revisor clínico
+  PENDING // Recién subido, pendiente de procesamiento
+  PROCESSING // En proceso de OCR/NER
+  PROCESSED // OCR/NER completado, listo para revisión
+  FAILED // Error en procesamiento
+  VALIDATED // Aprobado por revisor clínico
+  REJECTED // Rechazado por revisor clínico
 }
 
 enum DocumentType {
@@ -63,29 +68,31 @@ enum Sex {
 // se añade por migraciones sucesivas según docs/database/README.md.
 
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
-  email        String    @unique
-  username     String    @unique
-  firstName    String    @map("first_name")
-  lastName     String    @map("last_name")
-  fullName     String    @map("full_name")
-  documentType DocumentType? @map("document_type")
-  documentNumber String? @unique @map("document_number")
-  profession   String?
-  passwordHash String    @map("password_hash")
-  isActive     Boolean   @default(true) @map("is_active")
-  lastLoginAt  DateTime? @map("last_login_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  createdBy    String?   @map("created_by") @db.Uuid
-  updatedAt    DateTime  @updatedAt @map("updated_at")
-  updatedBy    String?   @map("updated_by") @db.Uuid
-  version      Int       @default(0)
+  id             String        @id @default(uuid()) @db.Uuid
+  email          String        @unique
+  username       String        @unique
+  firstName      String        @map("first_name")
+  lastName       String        @map("last_name")
+  fullName       String        @map("full_name")
+  documentType   DocumentType? @map("document_type")
+  documentNumber String?       @unique @map("document_number")
+  profession     String?
+  passwordHash   String        @map("password_hash")
+  isActive       Boolean       @default(true) @map("is_active")
+  lastLoginAt    DateTime?     @map("last_login_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  createdBy      String?       @map("created_by") @db.Uuid
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+  updatedBy      String?       @map("updated_by") @db.Uuid
+  version        Int           @default(0)
 
-  userRoles     UserRole[]
-  refreshTokens RefreshToken[]
-  notifications Notification[]
-  professionalRecords ClinicalRecord[]      @relation("ClinicalRecordProfessional")
-  clinicalRecordDrafts ClinicalRecordDraft[] @relation("ClinicalRecordDraftActor")
+  userRoles                        UserRole[]
+  refreshTokens                    RefreshToken[]
+  notifications                    Notification[]
+  professionalRecords              ClinicalRecord[]           @relation("ClinicalRecordProfessional")
+  clinicalRecordDrafts             ClinicalRecordDraft[]      @relation("ClinicalRecordDraftActor")
+  uploadedClinicalMedia            ClinicalMediaAsset[]       @relation("ClinicalMediaUploader")
+  createdClinicalRecordAttachments ClinicalRecordAttachment[] @relation("ClinicalRecordAttachmentCreator")
 
   @@map("users")
 }
@@ -108,8 +115,8 @@ model Notification {
 }
 
 model Role {
-  id          String  @id @default(uuid()) @db.Uuid
-  key         String  @unique
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
   name        String
   description String?
   createdAt   DateTime @default(now()) @map("created_at")
@@ -122,8 +129,8 @@ model Role {
 }
 
 model Permission {
-  id          String  @id @default(uuid()) @db.Uuid
-  key         String  @unique
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
   description String?
   createdAt   DateTime @default(now()) @map("created_at")
 
@@ -194,12 +201,13 @@ model Patient {
   updatedBy      String?      @map("updated_by") @db.Uuid
   version        Int          @default(0)
 
+  clinicalRecords      ClinicalRecord[]
+  clinicalRecordDrafts ClinicalRecordDraft[]
+  clinicalMediaAssets  ClinicalMediaAsset[]
+  medicalDocuments     MedicalDocument[]
+
   @@unique([documentType, documentNumber])
   @@map("patients")
-
-  clinicalRecords  ClinicalRecord[]
-  clinicalRecordDrafts ClinicalRecordDraft[]
-  medicalDocuments MedicalDocument[]
 }
 
 // ─── Historias clínicas ───────────────────────────────────────────────────────
@@ -208,51 +216,102 @@ model Patient {
 // Las anulaciones cambian status a VOIDED y persisten la razón (voidReason).
 
 model ClinicalRecord {
-  id             String       @id @default(uuid()) @db.Uuid
-  patientId      String       @map("patient_id") @db.Uuid
-  recordType     RecordType   @map("record_type")
-  origin         RecordOrigin @default(MANUAL)
-  status         RecordStatus @default(ACTIVE)
+  id         String       @id @default(uuid()) @db.Uuid
+  patientId  String       @map("patient_id") @db.Uuid
+  recordType RecordType   @map("record_type")
+  origin     RecordOrigin @default(MANUAL)
+  status     RecordStatus @default(ACTIVE)
 
-  attendedAt     DateTime     @map("attended_at") @db.Timestamptz
-  summary        String
-  notes          String?
+  attendedAt DateTime @map("attended_at") @db.Timestamptz
+  summary    String
+  notes      String?
 
   // Payload tipado por recordType. schemaVersion permite evolucionarlo sin
   // invalidar registros históricos, que se migran de forma aditiva a {} / v1.
-  details        Json         @default("{}")
-  schemaVersion  Int          @default(1) @map("schema_version")
+  details       Json @default("{}")
+  schemaVersion Int  @default(1) @map("schema_version")
 
   // Contexto clínico de la atención (opcionales — rediseño julio 2026).
-  doctorName           String? @map("doctor_name")
-  professionalId       String? @map("professional_id") @db.Uuid
-  professionalNameSnapshot String? @map("professional_name_snapshot")
+  doctorName                  String? @map("doctor_name")
+  professionalId              String? @map("professional_id") @db.Uuid
+  professionalNameSnapshot    String? @map("professional_name_snapshot")
   professionalLicenseSnapshot String? @map("professional_license_snapshot")
-  service              String?
-  preliminaryDiagnosis String? @map("preliminary_diagnosis")
-  plan                 String?
-  priority             String  @default("NORMAL")
+  service                     String?
+  preliminaryDiagnosis        String? @map("preliminary_diagnosis")
+  plan                        String?
+  priority                    String  @default("NORMAL")
 
   // Cadena de correcciones: si este registro es una corrección, apunta al previo.
-  parentRecordId String?      @map("parent_record_id") @db.Uuid
+  parentRecordId String? @map("parent_record_id") @db.Uuid
 
-  voidReason     String?      @map("void_reason")
+  voidReason String? @map("void_reason")
 
-  createdAt      DateTime     @default(now()) @map("created_at")
-  createdBy      String?      @map("created_by") @db.Uuid
-  updatedAt      DateTime     @updatedAt @map("updated_at")
-  updatedBy      String?      @map("updated_by") @db.Uuid
-  version        Int          @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  createdBy String?  @map("created_by") @db.Uuid
+  updatedAt DateTime @updatedAt @map("updated_at")
+  updatedBy String?  @map("updated_by") @db.Uuid
+  version   Int      @default(0)
 
-  patient         Patient         @relation(fields: [patientId], references: [id])
-  professional    User?           @relation("ClinicalRecordProfessional", fields: [professionalId], references: [id], onDelete: SetNull)
-  parentRecord    ClinicalRecord? @relation("CorrectionChain", fields: [parentRecordId], references: [id])
-  corrections     ClinicalRecord[] @relation("CorrectionChain")
+  patient      Patient                    @relation(fields: [patientId], references: [id])
+  professional User?                      @relation("ClinicalRecordProfessional", fields: [professionalId], references: [id], onDelete: SetNull)
+  parentRecord ClinicalRecord?            @relation("CorrectionChain", fields: [parentRecordId], references: [id])
+  corrections  ClinicalRecord[]           @relation("CorrectionChain")
+  attachments  ClinicalRecordAttachment[]
 
   @@index([patientId, attendedAt(sort: Desc)])
   @@index([patientId, status])
   @@index([professionalId])
   @@map("clinical_records")
+}
+
+// Imagen clínica privada normalizada por el servidor. El binario vive en
+// UPLOAD_DIR y puede ser reutilizado por varias revisiones del mismo registro.
+model ClinicalMediaAsset {
+  id           String              @id @default(uuid()) @db.Uuid
+  patientId    String              @map("patient_id") @db.Uuid
+  uploadedBy   String              @map("uploaded_by") @db.Uuid
+  originalName String              @map("original_name")
+  storagePath  String              @unique @map("storage_path")
+  mimeType     String              @map("mime_type")
+  sizeBytes    Int                 @map("size_bytes")
+  width        Int
+  height       Int
+  sha256       String              @db.Char(64)
+  status       ClinicalMediaStatus @default(TEMPORARY)
+  expiresAt    DateTime?           @map("expires_at") @db.Timestamptz
+  version      Int                 @default(0)
+  createdAt    DateTime            @default(now()) @map("created_at")
+  updatedAt    DateTime            @updatedAt @map("updated_at")
+
+  patient     Patient                    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  uploader    User                       @relation("ClinicalMediaUploader", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  attachments ClinicalRecordAttachment[]
+
+  @@index([patientId, status])
+  @@index([uploadedBy, status, expiresAt])
+  @@index([status, expiresAt])
+  @@map("clinical_media_assets")
+}
+
+model ClinicalRecordAttachment {
+  id               String   @id @default(uuid()) @db.Uuid
+  clinicalRecordId String   @map("clinical_record_id") @db.Uuid
+  assetId          String   @map("asset_id") @db.Uuid
+  sectionKey       String?  @map("section_key")
+  caption          String?
+  altText          String?  @map("alt_text")
+  sortOrder        Int      @default(0) @map("sort_order")
+  createdBy        String   @map("created_by") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  clinicalRecord ClinicalRecord     @relation(fields: [clinicalRecordId], references: [id], onDelete: Cascade)
+  asset          ClinicalMediaAsset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  creator        User               @relation("ClinicalRecordAttachmentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@unique([clinicalRecordId, assetId])
+  @@index([clinicalRecordId, sortOrder, createdAt])
+  @@index([assetId])
+  @@map("clinical_record_attachments")
 }
 
 // Borrador clínico privado por profesional y paciente. El payload puede estar
@@ -283,34 +342,34 @@ model ClinicalRecordDraft {
 // originalName se usa solo para display y Content-Disposition.
 
 model MedicalDocument {
-  id           String         @id @default(uuid()) @db.Uuid
-  patientId    String         @map("patient_id") @db.Uuid
-  originalName String         @map("original_name")
-  storagePath  String         @map("storage_path")
-  mimeType     String         @map("mime_type")
-  sizeBytes    Int            @map("size_bytes")
-  status       DocumentStatus @default(PENDING)
-  ocrText      String?        @map("ocr_text")
-  nerEntities  Json?          @map("ner_entities")
-  correctedText String?       @map("corrected_text")
-  correctedEntities Json?     @map("corrected_entities")
-  correctedAt  DateTime?      @map("corrected_at")
-  correctedById String?       @map("corrected_by_id") @db.Uuid
-  rejectReason String?        @map("reject_reason")
-  metrics         Json?       @map("metrics")
-  ocrConfidence   Float?      @map("ocr_confidence")
-  confidenceLevel String?     @map("confidence_level")
-  processedAt  DateTime?      @map("processed_at")
-  reviewedAt   DateTime?      @map("reviewed_at")
-  reviewedBy   String?        @map("reviewed_by") @db.Uuid
-  validationChecklist Json?   @map("validation_checklist")
-  validationAttested Boolean  @default(false) @map("validation_attested")
-  validationAttestedAt DateTime? @map("validation_attested_at")
-  createdAt    DateTime       @default(now()) @map("created_at")
-  createdBy    String?        @map("created_by") @db.Uuid
-  updatedAt    DateTime       @updatedAt @map("updated_at")
-  updatedBy    String?        @map("updated_by") @db.Uuid
-  version      Int            @default(0)
+  id                   String         @id @default(uuid()) @db.Uuid
+  patientId            String         @map("patient_id") @db.Uuid
+  originalName         String         @map("original_name")
+  storagePath          String         @map("storage_path")
+  mimeType             String         @map("mime_type")
+  sizeBytes            Int            @map("size_bytes")
+  status               DocumentStatus @default(PENDING)
+  ocrText              String?        @map("ocr_text")
+  nerEntities          Json?          @map("ner_entities")
+  correctedText        String?        @map("corrected_text")
+  correctedEntities    Json?          @map("corrected_entities")
+  correctedAt          DateTime?      @map("corrected_at")
+  correctedById        String?        @map("corrected_by_id") @db.Uuid
+  rejectReason         String?        @map("reject_reason")
+  metrics              Json?          @map("metrics")
+  ocrConfidence        Float?         @map("ocr_confidence")
+  confidenceLevel      String?        @map("confidence_level")
+  processedAt          DateTime?      @map("processed_at")
+  reviewedAt           DateTime?      @map("reviewed_at")
+  reviewedBy           String?        @map("reviewed_by") @db.Uuid
+  validationChecklist  Json?          @map("validation_checklist")
+  validationAttested   Boolean        @default(false) @map("validation_attested")
+  validationAttestedAt DateTime?      @map("validation_attested_at")
+  createdAt            DateTime       @default(now()) @map("created_at")
+  createdBy            String?        @map("created_by") @db.Uuid
+  updatedAt            DateTime       @updatedAt @map("updated_at")
+  updatedBy            String?        @map("updated_by") @db.Uuid
+  version              Int            @default(0)
 
   patient Patient @relation(fields: [patientId], references: [id])
 

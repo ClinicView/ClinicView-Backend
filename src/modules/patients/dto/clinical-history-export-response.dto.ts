@@ -7,6 +7,7 @@ import {
   RecordType,
   Sex,
 } from '@prisma/client';
+import { ClinicalRecordAttachmentResponseDto } from '../../clinical-records/dto/record-attachment.dto';
 
 export class ClinicalHistoryExportPatientDto {
   @ApiProperty() id: string;
@@ -30,7 +31,19 @@ export class ClinicalHistoryExportRecordDto {
   @ApiProperty() attendedAt: Date;
   @ApiProperty() summary: string;
   @ApiPropertyOptional({ type: String, nullable: true }) notes: string | null;
+  @ApiProperty({
+    type: Object,
+    description: 'Contenido clínico tipado según recordType y schemaVersion.',
+  })
+  details: Record<string, unknown>;
+  @ApiProperty({ minimum: 1 }) schemaVersion: number;
   @ApiPropertyOptional({ type: String, nullable: true }) doctorName: string | null;
+  @ApiPropertyOptional({ type: String, format: 'uuid', nullable: true })
+  professionalId: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true })
+  professionalNameSnapshot: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true })
+  professionalLicenseSnapshot: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) service: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) preliminaryDiagnosis: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) plan: string | null;
@@ -41,6 +54,9 @@ export class ClinicalHistoryExportRecordDto {
   @ApiPropertyOptional({ type: String, nullable: true }) createdBy: string | null;
   @ApiProperty() updatedAt: Date;
   @ApiPropertyOptional({ type: String, nullable: true }) updatedBy: string | null;
+  @ApiProperty({ minimum: 0 }) version: number;
+  @ApiProperty({ type: [ClinicalRecordAttachmentResponseDto] })
+  attachments: ClinicalRecordAttachmentResponseDto[];
 }
 
 export class ClinicalHistoryExportDocumentDto {
@@ -52,8 +68,7 @@ export class ClinicalHistoryExportDocumentDto {
   @ApiPropertyOptional({
     type: String,
     nullable: true,
-    description:
-      'Texto clínico consolidado. Solo se expone cuando el documento fue validado.',
+    description: 'Texto clínico consolidado. Solo se expone cuando el documento fue validado.',
   })
   clinicalText: string | null;
   @ApiProperty({ enum: ['CORRECTED', 'OCR', 'NONE'] })
@@ -82,8 +97,7 @@ export class ClinicalHistoryExportResponseDto {
   documents: ClinicalHistoryExportDocumentDto[];
 
   @ApiProperty({
-    description:
-      'Instante del servidor en que se generó la instantánea para la exportación.',
+    description: 'Instante del servidor en que se generó la instantánea para la exportación.',
   })
   generatedAt: Date;
 }

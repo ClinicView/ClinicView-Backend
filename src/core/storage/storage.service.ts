@@ -1,6 +1,6 @@
 import { createReadStream, mkdirSync, ReadStream } from 'fs';
 import { readFile, unlink, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { dirname, isAbsolute, relative, resolve } from 'path';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -11,31 +11,49 @@ export class StorageService implements OnModuleInit {
   constructor(private readonly configService: ConfigService) {}
 
   onModuleInit(): void {
-    this.uploadDir = this.configService.get<string>('storage.uploadDir', './uploads');
+    this.uploadDir = resolve(this.configService.get<string>('storage.uploadDir', './uploads'));
     mkdirSync(this.uploadDir, { recursive: true });
   }
 
   async save(buffer: Buffer, filename: string, subdir?: string): Promise<string> {
-    const dir = subdir ? join(this.uploadDir, subdir) : this.uploadDir;
-    mkdirSync(dir, { recursive: true });
     const relativePath = subdir ? `${subdir}/${filename}` : filename;
-    await writeFile(join(this.uploadDir, relativePath), buffer);
+    const absolutePath = this.resolvePrivatePath(relativePath);
+    mkdirSync(dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, buffer);
     return relativePath;
   }
 
   createReadStream(relativePath: string): ReadStream {
-    return createReadStream(join(this.uploadDir, relativePath));
+    return createReadStream(this.resolvePrivatePath(relativePath));
   }
 
   async readFile(relativePath: string): Promise<Buffer> {
-    return readFile(join(this.uploadDir, relativePath));
+    return readFile(this.resolvePrivatePath(relativePath));
   }
 
   async delete(relativePath: string): Promise<void> {
     try {
-      await unlink(join(this.uploadDir, relativePath));
-    } catch {
-      // Archivo ya eliminado o nunca existió — no es un error
+      await unlink(this.resolvePrivatePath(relativePath));
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ) {
+        // El borrado es idempotente: un archivo ausente ya está eliminado.
+        return;
+      }
+      throw error;
     }
+  }
+
+  private resolvePrivatePath(relativePath: string): string {
+    const absolutePath = resolve(this.uploadDir, relativePath);
+    const fromRoot = relative(this.uploadDir, absolutePath);
+    if (!fromRoot || fromRoot.startsWith('..') || isAbsolute(fromRoot)) {
+      throw new Error('Ruta de almacenamiento privada inválida.');
+    }
+    return absolutePath;
   }
 }

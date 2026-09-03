@@ -12,9 +12,11 @@ import {
   Put,
   Query,
   Request,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../core/rbac/permissions.guard';
 import { RequirePermissions } from '../../core/rbac/requires-permissions.decorator';
@@ -73,13 +75,17 @@ export class ClinicalRecordsController {
   @ApiResponse({
     status: 200,
     type: RecordDraftResponseDto,
-    description: 'Devuelve null cuando no existe un borrador vigente.',
+    description: 'Borrador vigente del usuario para el paciente.',
   })
-  getCurrentDraft(
+  @ApiResponse({ status: 204, description: 'No existe un borrador vigente.' })
+  async getCurrentDraft(
     @Param('patientId', ParseUUIDPipe) patientId: string,
     @Request() req: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<RecordDraftResponseDto | null> {
-    return this.service.getCurrentDraft(patientId, req.user.sub);
+    const draft = await this.service.getCurrentDraft(patientId, req.user.sub);
+    if (!draft) response.status(HttpStatus.NO_CONTENT);
+    return draft;
   }
 
   @Put('draft/current')

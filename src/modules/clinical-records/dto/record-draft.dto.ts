@@ -21,6 +21,7 @@ import {
   ClinicalDetailsApiModels,
   IsClinicalRecordDetails,
 } from './record-details.dto';
+import { RecordAttachmentInputDto, RecordAttachmentsValidation } from './record-attachment.dto';
 
 const emptyToUndefined = ({ value }: { value: unknown }): unknown => {
   if (typeof value !== 'string') return value;
@@ -111,6 +112,14 @@ export class RecordDraftPayloadDto {
   @IsObject()
   @IsClinicalRecordDetails({ partial: true })
   details?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: [RecordAttachmentInputDto],
+    maxItems: 10,
+    description: 'Referencias a imágenes temporales privadas del actor.',
+  })
+  @RecordAttachmentsValidation()
+  attachments?: RecordAttachmentInputDto[];
 }
 
 export class UpsertRecordDraftDto {

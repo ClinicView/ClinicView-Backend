@@ -9,8 +9,14 @@ import {
 import { PrismaService } from '../../../database/prisma.service';
 
 const withCountArgs = {
-  include: { _count: { select: { corrections: true } } },
-} as const;
+  include: {
+    _count: { select: { corrections: true } },
+    attachments: {
+      include: { asset: true },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    },
+  },
+} satisfies Prisma.ClinicalRecordDefaultArgs;
 
 export type RecordWithCount = Prisma.ClinicalRecordGetPayload<typeof withCountArgs>;
 

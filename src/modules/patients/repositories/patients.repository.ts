@@ -23,7 +23,12 @@ const clinicalHistoryExportArgs = {
         attendedAt: true,
         summary: true,
         notes: true,
+        details: true,
+        schemaVersion: true,
         doctorName: true,
+        professionalId: true,
+        professionalNameSnapshot: true,
+        professionalLicenseSnapshot: true,
         service: true,
         preliminaryDiagnosis: true,
         plan: true,
@@ -34,6 +39,37 @@ const clinicalHistoryExportArgs = {
         createdBy: true,
         updatedAt: true,
         updatedBy: true,
+        version: true,
+        attachments: {
+          select: {
+            id: true,
+            assetId: true,
+            sectionKey: true,
+            caption: true,
+            altText: true,
+            sortOrder: true,
+            createdBy: true,
+            createdAt: true,
+            asset: {
+              select: {
+                id: true,
+                patientId: true,
+                originalName: true,
+                mimeType: true,
+                sizeBytes: true,
+                width: true,
+                height: true,
+                sha256: true,
+                status: true,
+                expiresAt: true,
+                version: true,
+                createdAt: true,
+                updatedAt: true,
+              },
+            },
+          },
+          orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        },
       },
       orderBy: [{ attendedAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
     },
@@ -106,9 +142,7 @@ export class PatientsRepository {
     return this.prisma.patient.findUnique({ where: { id } });
   }
 
-  async findClinicalHistoryForExport(
-    id: string,
-  ): Promise<PatientClinicalHistoryExport | null> {
+  async findClinicalHistoryForExport(id: string): Promise<PatientClinicalHistoryExport | null> {
     return this.prisma.$transaction(
       (transaction) =>
         transaction.patient.findUnique({

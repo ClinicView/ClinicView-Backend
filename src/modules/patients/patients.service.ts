@@ -10,6 +10,7 @@ import {
   databaseDateToDateOnly,
   dateOnlyToDatabaseDate,
 } from '../../common/validation/clinical-date';
+import { buildClinicalMediaContentUrl } from '../clinical-records/dto/record-attachment.dto';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { ClinicalHistoryExportResponseDto } from './dto/clinical-history-export-response.dto';
 import { FindPatientsQueryDto } from './dto/find-patients-query.dto';
@@ -64,9 +65,7 @@ export class PatientsService {
     return this.patientsRepository.stats();
   }
 
-  async findAll(
-    query: FindPatientsQueryDto,
-  ): Promise<PaginatedResponse<PatientResponseDto>> {
+  async findAll(query: FindPatientsQueryDto): Promise<PaginatedResponse<PatientResponseDto>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
     const skip = (page - 1) * limit;
@@ -103,14 +102,73 @@ export class PatientsService {
         ...patient,
         dateOfBirth: databaseDateToDateOnly(patient.dateOfBirth),
       },
-      records: clinicalRecords,
+      records: clinicalRecords.map((record) => ({
+        id: record.id,
+        recordType: record.recordType,
+        origin: record.origin,
+        status: record.status,
+        attendedAt: record.attendedAt,
+        summary: record.summary,
+        notes: record.notes,
+        details: record.details as Record<string, unknown>,
+        schemaVersion: record.schemaVersion,
+        doctorName: record.doctorName,
+        professionalId: record.professionalId,
+        professionalNameSnapshot: record.professionalNameSnapshot,
+        professionalLicenseSnapshot: record.professionalLicenseSnapshot,
+        service: record.service,
+        preliminaryDiagnosis: record.preliminaryDiagnosis,
+        plan: record.plan,
+        priority: record.priority,
+        parentRecordId: record.parentRecordId,
+        voidReason: record.voidReason,
+        createdAt: record.createdAt,
+        createdBy: record.createdBy,
+        updatedAt: record.updatedAt,
+        updatedBy: record.updatedBy,
+        version: record.version,
+        attachments: [...record.attachments]
+          .sort(
+            (left, right) =>
+              left.sortOrder - right.sortOrder ||
+              left.createdAt.getTime() - right.createdAt.getTime() ||
+              left.id.localeCompare(right.id),
+          )
+          .map((attachment) => ({
+            id: attachment.id,
+            assetId: attachment.assetId,
+            sectionKey: attachment.sectionKey,
+            caption: attachment.caption,
+            altText: attachment.altText,
+            sortOrder: attachment.sortOrder,
+            createdBy: attachment.createdBy,
+            createdAt: attachment.createdAt,
+            asset: {
+              id: attachment.asset.id,
+              patientId: attachment.asset.patientId,
+              originalName: attachment.asset.originalName,
+              mimeType: attachment.asset.mimeType,
+              sizeBytes: attachment.asset.sizeBytes,
+              width: attachment.asset.width,
+              height: attachment.asset.height,
+              sha256: attachment.asset.sha256,
+              status: attachment.asset.status,
+              expiresAt: attachment.asset.expiresAt,
+              version: attachment.asset.version,
+              createdAt: attachment.asset.createdAt,
+              updatedAt: attachment.asset.updatedAt,
+              contentUrl: buildClinicalMediaContentUrl(
+                attachment.asset.patientId,
+                attachment.asset.id,
+              ),
+            },
+          })),
+      })),
       documents: medicalDocuments.map((document) => {
         const canExposeClinicalText = document.status === 'VALIDATED';
         const correctedText = document.correctedText?.trim();
         const ocrText = document.ocrText?.trim();
-        const clinicalText = canExposeClinicalText
-          ? (correctedText || ocrText || null)
-          : null;
+        const clinicalText = canExposeClinicalText ? correctedText || ocrText || null : null;
 
         return {
           id: document.id,
@@ -119,12 +177,7 @@ export class PatientsService {
           sizeBytes: document.sizeBytes,
           status: document.status,
           clinicalText,
-          textSource:
-            clinicalText === null
-              ? 'NONE'
-              : correctedText
-                ? 'CORRECTED'
-                : 'OCR',
+          textSource: clinicalText === null ? 'NONE' : correctedText ? 'CORRECTED' : 'OCR',
           rejectReason: document.rejectReason,
           createdAt: document.createdAt,
           processedAt: document.processedAt,

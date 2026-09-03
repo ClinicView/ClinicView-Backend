@@ -20,6 +20,7 @@ import {
   CLINICAL_RECORD_SCHEMA_VERSION,
   ClinicalDetailsApiModels,
 } from './record-details.dto';
+import { RecordAttachmentInputDto, RecordAttachmentsValidation } from './record-attachment.dto';
 
 @ClinicalDetailsApiModels()
 export class CorrectRecordDto {
@@ -106,4 +107,12 @@ export class CorrectRecordDto {
   @IsOptional()
   @IsObject()
   details?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: [RecordAttachmentInputDto],
+    maxItems: 10,
+    description: 'Si se omite, hereda los adjuntos del registro original.',
+  })
+  @RecordAttachmentsValidation()
+  attachments?: RecordAttachmentInputDto[];
 }

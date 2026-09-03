@@ -14,6 +14,7 @@ import {
 } from '@prisma/client';
 import { parseClinicalDateFilter } from '../../common/validation/clinical-date';
 import { PrismaService } from '../../database/prisma.service';
+import { ClinicalRecordMediaService } from './clinical-record-media.service';
 import { CorrectRecordDto } from './dto/correct-record.dto';
 import { CreateRecordDto } from './dto/create-record.dto';
 import { FindRecordsQueryDto } from './dto/find-records-query.dto';
@@ -83,6 +84,7 @@ export class ClinicalRecordsService {
   constructor(
     private readonly repo: ClinicalRecordsRepository,
     private readonly prisma: PrismaService,
+    private readonly media: ClinicalRecordMediaService,
   ) {}
 
   async create(
@@ -94,7 +96,7 @@ export class ClinicalRecordsService {
     const details = this.normalizeDetails(dto.recordType, dto.details);
     const schemaVersion = dto.schemaVersion ?? CLINICAL_RECORD_SCHEMA_VERSION;
 
-    const record = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await this.requireActivePatient(patientId, tx);
       const professional = await this.resolveProfessional(dto, tx);
       const created = await this.repo.createInTransaction(
@@ -118,6 +120,15 @@ export class ClinicalRecordsService {
         tx,
       );
 
+      const bound = await this.media.bindAttachments(
+        patientId,
+        created.id,
+        actorId,
+        dto.attachments ?? [],
+        new Set(),
+        tx,
+      );
+
       if (dto.draftId) {
         const consumed = await this.repo.deleteDraftByIdForActor(
           dto.draftId,
@@ -132,10 +143,13 @@ export class ClinicalRecordsService {
         }
       }
 
-      return created;
+      const hydrated = await this.repo.findByIdAndPatient(created.id, patientId, tx);
+      if (!hydrated) throw new ConflictException('No se pudo recuperar el registro creado.');
+      return { record: hydrated, bound };
     });
 
-    return this.toResponse(record);
+    this.media.logBoundAttachments(actorId, patientId, result.record.id, result.bound);
+    return this.toResponse(result.record);
   }
 
   async findByPatient(
@@ -175,7 +189,7 @@ export class ClinicalRecordsService {
   ): Promise<RecordResponseDto> {
     this.requireActor(actorId);
 
-    const newRecord = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const original = await this.repo.findByIdAndPatient(id, patientId, tx);
       if (!original) throw new NotFoundException('Historia clínica no encontrada.');
       if (original.status !== RecordStatus.ACTIVE) {
@@ -212,7 +226,7 @@ export class ClinicalRecordsService {
         );
       }
 
-      return this.repo.createInTransaction(
+      const created = await this.repo.createInTransaction(
         {
           patientId,
           recordType,
@@ -235,9 +249,34 @@ export class ClinicalRecordsService {
         },
         tx,
       );
+
+      const reusableAssetIds = new Set(
+        original.attachments.map((attachment) => attachment.assetId),
+      );
+      const requestedAttachments =
+        dto.attachments ??
+        original.attachments.map((attachment) => ({
+          assetId: attachment.assetId,
+          sectionKey: attachment.sectionKey,
+          caption: attachment.caption,
+          altText: attachment.altText,
+          sortOrder: attachment.sortOrder,
+        }));
+      const bound = await this.media.bindAttachments(
+        patientId,
+        created.id,
+        actorId,
+        requestedAttachments,
+        reusableAssetIds,
+        tx,
+      );
+      const hydrated = await this.repo.findByIdAndPatient(created.id, patientId, tx);
+      if (!hydrated) throw new ConflictException('No se pudo recuperar el registro corregido.');
+      return { record: hydrated, bound };
     });
 
-    return this.toResponse(newRecord);
+    this.media.logBoundAttachments(actorId, patientId, result.record.id, result.bound);
+    return this.toResponse(result.record);
   }
 
   async void(
@@ -302,12 +341,25 @@ export class ClinicalRecordsService {
     actorId: string,
   ): Promise<RecordDraftResponseDto> {
     this.requireActor(actorId);
-    const payload = this.normalizeDraftPayload(dto.payload);
+    let payload = this.normalizeDraftPayload(dto.payload);
     const expiresAt = new Date(Date.now() + RECORD_DRAFT_TTL_MS);
 
     try {
       const draft = await this.prisma.$transaction(async (tx) => {
         await this.requireActivePatient(patientId, tx);
+        if (dto.payload.attachments !== undefined) {
+          const attachments = await this.media.validateDraftAttachments(
+            patientId,
+            actorId,
+            dto.payload.attachments,
+            expiresAt,
+            tx,
+          );
+          payload = {
+            ...payload,
+            attachments: JSON.parse(JSON.stringify(attachments)) as Prisma.InputJsonValue,
+          };
+        }
         let current = await this.repo.findDraftByActorAndPatient(patientId, actorId, tx);
         if (current && current.expiresAt.getTime() <= Date.now()) {
           await this.repo.deleteDraftById(current.id, tx);
@@ -528,6 +580,17 @@ export class ClinicalRecordsService {
       createdBy: record.createdBy,
       updatedAt: record.updatedAt,
       version: record.version,
+      attachments: record.attachments.map((attachment) => ({
+        id: attachment.id,
+        assetId: attachment.assetId,
+        sectionKey: attachment.sectionKey,
+        caption: attachment.caption,
+        altText: attachment.altText,
+        sortOrder: attachment.sortOrder,
+        createdBy: attachment.createdBy,
+        createdAt: attachment.createdAt,
+        asset: this.media.toAssetResponse(attachment.asset),
+      })),
     };
   }
 }

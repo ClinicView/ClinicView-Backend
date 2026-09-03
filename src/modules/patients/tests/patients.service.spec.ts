@@ -120,6 +120,8 @@ describe('PatientsService', () => {
   describe('exportClinicalHistory', () => {
     const recordCreatedAt = new Date('2025-05-10T15:00:00.000Z');
     const documentCreatedAt = new Date('2025-05-11T15:00:00.000Z');
+    const firstAttachmentCreatedAt = new Date('2025-05-10T15:02:00.000Z');
+    const secondAttachmentCreatedAt = new Date('2025-05-10T15:03:00.000Z');
 
     const snapshot = {
       id: mockPatient.id,
@@ -141,7 +143,12 @@ describe('PatientsService', () => {
           attendedAt: recordCreatedAt,
           summary: 'Consulta original',
           notes: 'Nota clínica',
+          details: { chiefComplaint: 'Dolor torácico' },
+          schemaVersion: 1,
           doctorName: 'Dra. Rivera',
+          professionalId: 'professional-uuid',
+          professionalNameSnapshot: 'Dra. Elena Rivera',
+          professionalLicenseSnapshot: 'CMP 12345',
           service: 'Medicina interna',
           preliminaryDiagnosis: 'Diagnóstico preliminar',
           plan: 'Plan clínico',
@@ -152,6 +159,63 @@ describe('PatientsService', () => {
           createdBy: 'creator-uuid',
           updatedAt: recordCreatedAt,
           updatedBy: 'updater-uuid',
+          version: 4,
+          attachments: [
+            {
+              id: 'attachment-b',
+              assetId: 'asset-b',
+              sectionKey: 'physicalExam',
+              caption: 'Vista lateral',
+              altText: 'Lesión observada desde el lado derecho',
+              sortOrder: 1,
+              createdBy: 'creator-uuid',
+              createdAt: secondAttachmentCreatedAt,
+              asset: {
+                id: 'asset-b',
+                patientId: mockPatient.id,
+                originalName: 'vista-lateral.png',
+                mimeType: 'image/png',
+                sizeBytes: 4096,
+                width: 1200,
+                height: 900,
+                sha256: 'b'.repeat(64),
+                status: 'ATTACHED' as const,
+                expiresAt: null,
+                version: 1,
+                createdAt: secondAttachmentCreatedAt,
+                updatedAt: secondAttachmentCreatedAt,
+                storagePath: 'clinical-media/private/asset-b.png',
+                uploadedBy: 'uploader-uuid',
+              },
+            },
+            {
+              id: 'attachment-a',
+              assetId: 'asset-a',
+              sectionKey: null,
+              caption: 'Vista frontal',
+              altText: 'Lesión observada de frente',
+              sortOrder: 0,
+              createdBy: 'creator-uuid',
+              createdAt: firstAttachmentCreatedAt,
+              asset: {
+                id: 'asset-a',
+                patientId: mockPatient.id,
+                originalName: 'vista-frontal.jpg',
+                mimeType: 'image/jpeg',
+                sizeBytes: 3072,
+                width: 1200,
+                height: 900,
+                sha256: 'a'.repeat(64),
+                status: 'ATTACHED' as const,
+                expiresAt: null,
+                version: 1,
+                createdAt: firstAttachmentCreatedAt,
+                updatedAt: firstAttachmentCreatedAt,
+                storagePath: 'clinical-media/private/asset-a.jpg',
+                uploadedBy: 'uploader-uuid',
+              },
+            },
+          ],
         },
       ],
       medicalDocuments: [
@@ -206,6 +270,28 @@ describe('PatientsService', () => {
       expect(repo.findClinicalHistoryForExport).toHaveBeenCalledWith(mockPatient.id);
       expect(result.records).toHaveLength(1);
       expect(result.records[0].status).toBe('VOIDED');
+      expect(result.records[0]).toEqual(
+        expect.objectContaining({
+          details: { chiefComplaint: 'Dolor torácico' },
+          schemaVersion: 1,
+          version: 4,
+          professionalId: 'professional-uuid',
+          professionalNameSnapshot: 'Dra. Elena Rivera',
+          professionalLicenseSnapshot: 'CMP 12345',
+        }),
+      );
+      expect(result.records[0].attachments.map((attachment) => attachment.id)).toEqual([
+        'attachment-a',
+        'attachment-b',
+      ]);
+      expect(result.records[0].attachments[0].asset).toEqual(
+        expect.objectContaining({
+          id: 'asset-a',
+          contentUrl: `/patients/${mockPatient.id}/record-media/asset-a/content`,
+        }),
+      );
+      expect(result.records[0].attachments[0].asset).not.toHaveProperty('storagePath');
+      expect(result.records[0].attachments[0].asset).not.toHaveProperty('uploadedBy');
       expect(result.patient.dateOfBirth).toBe('1985-06-15');
       expect(result.documents).toEqual(
         expect.arrayContaining([

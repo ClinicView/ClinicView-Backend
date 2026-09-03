@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { RecordOrigin, RecordStatus, RecordType } from '@prisma/client';
+import { ClinicalRecordAttachmentResponseDto } from './record-attachment.dto';
 
 export class RecordResponseDto {
   @ApiProperty() id: string;
@@ -30,4 +31,6 @@ export class RecordResponseDto {
   @ApiPropertyOptional({ type: String, nullable: true }) createdBy: string | null;
   @ApiProperty() updatedAt: Date;
   @ApiProperty({ minimum: 0 }) version: number;
+  @ApiProperty({ type: [ClinicalRecordAttachmentResponseDto] })
+  attachments: ClinicalRecordAttachmentResponseDto[];
 }

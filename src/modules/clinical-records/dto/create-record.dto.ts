@@ -20,6 +20,7 @@ import {
   ClinicalDetailsApiModels,
   IsClinicalRecordDetails,
 } from './record-details.dto';
+import { RecordAttachmentInputDto, RecordAttachmentsValidation } from './record-attachment.dto';
 
 export const RECORD_PRIORITIES = ['URGENT', 'PRIORITY', 'NORMAL', 'ELECTIVE'] as const;
 export type RecordPriority = (typeof RECORD_PRIORITIES)[number];
@@ -111,6 +112,10 @@ export class CreateRecordDto {
   @IsObject()
   @IsClinicalRecordDetails()
   details: Record<string, unknown>;
+
+  @ApiPropertyOptional({ type: [RecordAttachmentInputDto], maxItems: 10, default: [] })
+  @RecordAttachmentsValidation()
+  attachments?: RecordAttachmentInputDto[];
 
   @ApiPropertyOptional({
     type: String,

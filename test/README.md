@@ -1,5 +1,16 @@
 ﻿# backend/test/
 
+## Ejecución segura
+
+`npm run test:e2e` exige `E2E_DATABASE_URL` de forma explícita. Debe apuntar a una base
+distinta de `clinicview_dev` e incluir exactamente `?schema=clinicview_e2e`. El setup y el
+teardown eliminan exclusivamente ese esquema literal; no existe fallback a `DATABASE_URL`.
+
+```powershell
+$env:E2E_DATABASE_URL = 'postgresql://postgres:clave@127.0.0.1:5432/clinicview_test?schema=clinicview_e2e'
+npm run test:e2e
+```
+
 Pruebas **end-to-end** del backend (NestJS e2e). Las pruebas unit/integration viven junto a cada mÃ³dulo
 (`modules/<modulo>/tests/`).
 

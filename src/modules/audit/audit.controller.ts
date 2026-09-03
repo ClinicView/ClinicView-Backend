@@ -5,6 +5,7 @@ import {
   ApiOperation,
   ApiResponse,
   ApiTags,
+  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { PermissionsGuard } from '../../core/rbac/permissions.guard';
 import { RequirePermissions } from '../../core/rbac/requires-permissions.decorator';
@@ -29,6 +30,7 @@ export class AuditController {
   @Header('Pragma', 'no-cache')
   @ApiOperation({ summary: 'Consultar eventos técnicos de auditoría append-only' })
   @ApiResponse({ status: 200, type: AuditEventsPageDto })
+  @ApiUnauthorizedResponse({ description: 'Token de acceso ausente, inválido o revocado.' })
   @ApiForbiddenResponse({ description: 'Requiere admin.audit.read.' })
   findMany(@Query() query: FindAuditEventsQueryDto): Promise<AuditEventsPageDto> {
     return this.auditService.findMany(query);

@@ -112,8 +112,7 @@ function startOfDateInTimeZone(parts: CalendarDateParts, timeZone: string): Date
 
   // Recalcular cubre cambios históricos de offset sin fijar UTC-05:00 en el código.
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const adjusted =
-      localMidnightAsUtc - timeZoneOffsetMilliseconds(new Date(instant), timeZone);
+    const adjusted = localMidnightAsUtc - timeZoneOffsetMilliseconds(new Date(instant), timeZone);
     if (adjusted === instant) break;
     instant = adjusted;
   }
@@ -138,13 +137,8 @@ export function currentDateOnlyInClinicalTimeZone(now = new Date()): string {
   return formatDateParts(datePartsInTimeZone(now, CLINICAL_TIME_ZONE));
 }
 
-export function isPastOrPresentDateOnly(
-  value: unknown,
-  now = new Date(),
-): value is string {
-  return (
-    isValidDateOnly(value) && value <= currentDateOnlyInClinicalTimeZone(now)
-  );
+export function isPastOrPresentDateOnly(value: unknown, now = new Date()): value is string {
+  return isValidDateOnly(value) && value <= currentDateOnlyInClinicalTimeZone(now);
 }
 
 export function isZonedIsoDateTime(value: unknown): value is string {
@@ -157,10 +151,7 @@ export function isZonedIsoDateTime(value: unknown): value is string {
   );
 }
 
-export function isPastOrPresentZonedIsoDateTime(
-  value: unknown,
-  now = new Date(),
-): value is string {
+export function isPastOrPresentZonedIsoDateTime(value: unknown, now = new Date()): value is string {
   return isZonedIsoDateTime(value) && Date.parse(value) <= now.getTime();
 }
 
@@ -238,9 +229,23 @@ export function IsPastOrPresentZonedIsoDateTime(
   };
 }
 
-export function IsClinicalDateFilter(
-  validationOptions?: ValidationOptions,
-): PropertyDecorator {
+export function IsZonedIsoDateTime(validationOptions?: ValidationOptions): PropertyDecorator {
+  return (target, propertyKey) => {
+    registerDecorator({
+      name: 'isZonedIsoDateTime',
+      target: target.constructor,
+      propertyName: propertyKey.toString(),
+      options: validationOptions,
+      validator: {
+        validate: (value: unknown) => isZonedIsoDateTime(value),
+        defaultMessage: (args) =>
+          `${args?.property ?? 'El valor'} debe ser un instante ISO 8601 con zona horaria explícita.`,
+      },
+    });
+  };
+}
+
+export function IsClinicalDateFilter(validationOptions?: ValidationOptions): PropertyDecorator {
   return (target, propertyKey) => {
     registerDecorator({
       name: 'isClinicalDateFilter',

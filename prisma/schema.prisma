@@ -84,6 +84,8 @@ model User {
   userRoles     UserRole[]
   refreshTokens RefreshToken[]
   notifications Notification[]
+  professionalRecords ClinicalRecord[]      @relation("ClinicalRecordProfessional")
+  clinicalRecordDrafts ClinicalRecordDraft[] @relation("ClinicalRecordDraftActor")
 
   @@map("users")
 }
@@ -196,6 +198,7 @@ model Patient {
   @@map("patients")
 
   clinicalRecords  ClinicalRecord[]
+  clinicalRecordDrafts ClinicalRecordDraft[]
   medicalDocuments MedicalDocument[]
 }
 
@@ -215,8 +218,16 @@ model ClinicalRecord {
   summary        String
   notes          String?
 
+  // Payload tipado por recordType. schemaVersion permite evolucionarlo sin
+  // invalidar registros históricos, que se migran de forma aditiva a {} / v1.
+  details        Json         @default("{}")
+  schemaVersion  Int          @default(1) @map("schema_version")
+
   // Contexto clínico de la atención (opcionales — rediseño julio 2026).
   doctorName           String? @map("doctor_name")
+  professionalId       String? @map("professional_id") @db.Uuid
+  professionalNameSnapshot String? @map("professional_name_snapshot")
+  professionalLicenseSnapshot String? @map("professional_license_snapshot")
   service              String?
   preliminaryDiagnosis String? @map("preliminary_diagnosis")
   plan                 String?
@@ -234,12 +245,36 @@ model ClinicalRecord {
   version        Int          @default(0)
 
   patient         Patient         @relation(fields: [patientId], references: [id])
+  professional    User?           @relation("ClinicalRecordProfessional", fields: [professionalId], references: [id], onDelete: SetNull)
   parentRecord    ClinicalRecord? @relation("CorrectionChain", fields: [parentRecordId], references: [id])
   corrections     ClinicalRecord[] @relation("CorrectionChain")
 
   @@index([patientId, attendedAt(sort: Desc)])
   @@index([patientId, status])
+  @@index([professionalId])
   @@map("clinical_records")
+}
+
+// Borrador clínico privado por profesional y paciente. El payload puede estar
+// incompleto, pero se valida según el mismo esquema discriminado que el alta.
+// expiresAt permite purgar PHI temporal de forma determinista.
+model ClinicalRecordDraft {
+  id        String   @id @default(uuid()) @db.Uuid
+  patientId String   @map("patient_id") @db.Uuid
+  actorId   String   @map("actor_id") @db.Uuid
+  payload   Json     @default("{}")
+  version   Int      @default(0)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  actor   User    @relation("ClinicalRecordDraftActor", fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@unique([patientId, actorId])
+  @@index([actorId, expiresAt])
+  @@index([expiresAt])
+  @@map("clinical_record_drafts")
 }
 
 // ─── Documentos médicos ───────────────────────────────────────────────────────

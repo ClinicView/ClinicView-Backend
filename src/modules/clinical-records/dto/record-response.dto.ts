@@ -10,7 +10,15 @@ export class RecordResponseDto {
   @ApiProperty() attendedAt: Date;
   @ApiProperty() summary: string;
   @ApiPropertyOptional({ type: String, nullable: true }) notes: string | null;
+  @ApiProperty({ type: Object, description: 'Contenido tipado según recordType y schemaVersion.' })
+  details: Record<string, unknown>;
+  @ApiProperty({ minimum: 1 }) schemaVersion: number;
   @ApiPropertyOptional({ type: String, nullable: true }) doctorName: string | null;
+  @ApiPropertyOptional({ type: String, format: 'uuid', nullable: true }) professionalId:
+    | string
+    | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) professionalNameSnapshot: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) professionalLicenseSnapshot: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) service: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) preliminaryDiagnosis: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) plan: string | null;
@@ -21,4 +29,5 @@ export class RecordResponseDto {
   @ApiProperty() createdAt: Date;
   @ApiPropertyOptional({ type: String, nullable: true }) createdBy: string | null;
   @ApiProperty() updatedAt: Date;
+  @ApiProperty({ minimum: 0 }) version: number;
 }

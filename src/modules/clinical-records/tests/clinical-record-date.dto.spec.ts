@@ -9,17 +9,18 @@ function createDto(attendedAt: string): CreateRecordDto {
     recordType: RecordType.CONSULTATION,
     attendedAt,
     summary: 'Control clínico',
+    details: { chiefComplaint: 'Dolor abdominal.' },
   });
 }
 
 describe('Clinical record date contracts', () => {
-  it.each([
-    '2020-09-02T09:30:00-05:00',
-    '2020-09-02T14:30:00Z',
-  ])('acepta un instante ISO con zona explícita: %s', async (attendedAt) => {
-    const errors = await validate(createDto(attendedAt));
-    expect(errors.find((error) => error.property === 'attendedAt')).toBeUndefined();
-  });
+  it.each(['2020-09-02T09:30:00-05:00', '2020-09-02T14:30:00Z'])(
+    'acepta un instante ISO con zona explícita: %s',
+    async (attendedAt) => {
+      const errors = await validate(createDto(attendedAt));
+      expect(errors.find((error) => error.property === 'attendedAt')).toBeUndefined();
+    },
+  );
 
   it('rechaza un datetime local ambiguo sin zona horaria', async () => {
     const errors = await validate(createDto('2026-09-02T09:30'));
@@ -32,7 +33,10 @@ describe('Clinical record date contracts', () => {
   });
 
   it('permite omitir la fecha en una corrección para heredar el instante original', async () => {
-    const dto = Object.assign(new CorrectRecordDto(), { summary: 'Resumen corregido' });
+    const dto = Object.assign(new CorrectRecordDto(), {
+      expectedVersion: 0,
+      summary: 'Resumen corregido',
+    });
     const errors = await validate(dto);
     expect(errors.find((error) => error.property === 'attendedAt')).toBeUndefined();
   });
@@ -40,6 +44,7 @@ describe('Clinical record date contracts', () => {
   it('rechaza una fecha de corrección sin zona horaria', async () => {
     const dto = Object.assign(new CorrectRecordDto(), {
       attendedAt: '2026-09-02T09:30',
+      expectedVersion: 0,
       summary: 'Resumen corregido',
     });
     const errors = await validate(dto);
@@ -49,6 +54,7 @@ describe('Clinical record date contracts', () => {
   it('rechaza una fecha futura en una corrección', async () => {
     const dto = Object.assign(new CorrectRecordDto(), {
       attendedAt: '2999-09-02T14:30:00Z',
+      expectedVersion: 0,
       summary: 'Resumen corregido',
     });
     const errors = await validate(dto);

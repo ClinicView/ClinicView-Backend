@@ -1,5 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { ClinicalRecord, Prisma, RecordOrigin, RecordStatus, RecordType } from '@prisma/client';
+import {
+  ClinicalRecordDraft,
+  Prisma,
+  RecordOrigin,
+  RecordStatus,
+  RecordType,
+} from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
 
 const withCountArgs = {
@@ -40,8 +46,7 @@ export class ClinicalRecordsRepository {
         ? {
             attendedAt: {
               ...(filters.from && { gte: filters.from }),
-              ...(filters.to &&
-                (filters.toExclusive ? { lt: filters.to } : { lte: filters.to })),
+              ...(filters.to && (filters.toExclusive ? { lt: filters.to } : { lte: filters.to })),
             },
           }
         : {}),
@@ -63,8 +68,13 @@ export class ClinicalRecordsRepository {
     return { records, total };
   }
 
-  async findByIdAndPatient(id: string, patientId: string): Promise<RecordWithCount | null> {
-    return this.prisma.clinicalRecord.findFirst({
+  async findByIdAndPatient(
+    id: string,
+    patientId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<RecordWithCount | null> {
+    const client = tx ?? this.prisma;
+    return client.clinicalRecord.findFirst({
       where: { id, patientId },
       ...withCountArgs,
     });
@@ -72,17 +82,25 @@ export class ClinicalRecordsRepository {
 
   async markCorrected(
     id: string,
+    patientId: string,
+    expectedVersion: number,
     updatedBy: string | undefined,
     tx: Prisma.TransactionClient,
-  ): Promise<void> {
-    await tx.clinicalRecord.update({
-      where: { id },
+  ): Promise<boolean> {
+    const result = await tx.clinicalRecord.updateMany({
+      where: {
+        id,
+        patientId,
+        status: RecordStatus.ACTIVE,
+        version: expectedVersion,
+      },
       data: {
         status: RecordStatus.CORRECTED,
         ...(updatedBy && { updatedBy }),
         version: { increment: 1 },
       },
     });
+    return result.count === 1;
   }
 
   async createInTransaction(
@@ -94,11 +112,19 @@ export class ClinicalRecordsRepository {
 
   async markVoided(
     id: string,
+    patientId: string,
+    expectedVersion: number,
     voidReason: string,
     updatedBy: string | undefined,
-  ): Promise<ClinicalRecord> {
-    return this.prisma.clinicalRecord.update({
-      where: { id },
+    tx: Prisma.TransactionClient,
+  ): Promise<boolean> {
+    const result = await tx.clinicalRecord.updateMany({
+      where: {
+        id,
+        patientId,
+        status: RecordStatus.ACTIVE,
+        version: expectedVersion,
+      },
       data: {
         status: RecordStatus.VOIDED,
         voidReason,
@@ -106,5 +132,68 @@ export class ClinicalRecordsRepository {
         version: { increment: 1 },
       },
     });
+    return result.count === 1;
+  }
+
+  async findDraftByActorAndPatient(
+    patientId: string,
+    actorId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<ClinicalRecordDraft | null> {
+    const client = tx ?? this.prisma;
+    return client.clinicalRecordDraft.findUnique({
+      where: { patientId_actorId: { patientId, actorId } },
+    });
+  }
+
+  async createDraft(
+    data: Prisma.ClinicalRecordDraftUncheckedCreateInput,
+    tx: Prisma.TransactionClient,
+  ): Promise<ClinicalRecordDraft> {
+    return tx.clinicalRecordDraft.create({ data });
+  }
+
+  async updateDraftCas(
+    id: string,
+    actorId: string,
+    expectedVersion: number,
+    payload: Prisma.InputJsonValue,
+    expiresAt: Date,
+    tx: Prisma.TransactionClient,
+  ): Promise<ClinicalRecordDraft | null> {
+    const updated = await tx.clinicalRecordDraft.updateMany({
+      where: { id, actorId, version: expectedVersion },
+      data: { payload, expiresAt, version: { increment: 1 } },
+    });
+    if (updated.count !== 1) return null;
+    return tx.clinicalRecordDraft.findUnique({ where: { id } });
+  }
+
+  async deleteDraftCas(
+    id: string,
+    actorId: string,
+    expectedVersion: number,
+    tx: Prisma.TransactionClient,
+  ): Promise<boolean> {
+    const deleted = await tx.clinicalRecordDraft.deleteMany({
+      where: { id, actorId, version: expectedVersion },
+    });
+    return deleted.count === 1;
+  }
+
+  async deleteDraftByIdForActor(
+    id: string,
+    patientId: string,
+    actorId: string,
+    tx: Prisma.TransactionClient,
+  ): Promise<boolean> {
+    const deleted = await tx.clinicalRecordDraft.deleteMany({
+      where: { id, patientId, actorId, expiresAt: { gt: new Date() } },
+    });
+    return deleted.count === 1;
+  }
+
+  async deleteDraftById(id: string, tx: Prisma.TransactionClient): Promise<void> {
+    await tx.clinicalRecordDraft.deleteMany({ where: { id } });
   }
 }

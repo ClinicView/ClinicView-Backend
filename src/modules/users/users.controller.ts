@@ -9,11 +9,14 @@ import {
   Patch,
   Post,
   Query,
+  Request,
   UseGuards,
 } from '@nestjs/common';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiConflictResponse,
+  ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOperation,
   ApiResponse,
@@ -27,8 +30,12 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AssignRoleDto } from './dto/assign-role.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { ChangeMyPasswordDto, ResetUserPasswordDto } from './dto/password.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { UsersService } from './users.service';
+import type { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
+
+type AuthRequest = { user: JwtPayload };
 
 @ApiTags('users')
 @ApiBearerAuth()
@@ -46,8 +53,15 @@ export class UsersController {
   @ApiOperation({ summary: 'Crear usuario del sistema (personal de salud o administrador)' })
   @ApiResponse({ status: 201, type: UserResponseDto, description: 'Usuario creado correctamente.' })
   @ApiConflictResponse({ description: 'El email ya está registrado en el sistema.' })
-  create(@Body() dto: CreateUserDto): Promise<UserResponseDto> {
-    return this.usersService.create(dto);
+  @ApiForbiddenResponse({ description: 'El actor no puede asignar el rol inicial solicitado.' })
+  create(
+    @Body() dto: CreateUserDto,
+    @Request() request: AuthRequest,
+  ): Promise<UserResponseDto> {
+    return this.usersService.create(dto, {
+      id: request.user.sub,
+      permissions: request.user.permissions,
+    });
   }
 
   @Get()
@@ -67,6 +81,19 @@ export class UsersController {
     return this.usersService.searchProfessionals(q ?? '');
   }
 
+  @Patch('me/password')
+  @Audited(AUDIT_ACTIONS.USER_PASSWORD_CHANGED, { resourceType: 'USER' })
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Cambiar mi contraseña verificando la credencial actual' })
+  @ApiResponse({ status: 204, description: 'Contraseña actualizada y sesiones revocadas.' })
+  @ApiBadRequestResponse({ description: 'Credencial actual incorrecta o nueva contraseña repetida.' })
+  async changeMyPassword(
+    @Body() dto: ChangeMyPasswordDto,
+    @Request() request: AuthRequest,
+  ): Promise<void> {
+    await this.usersService.changeMyPassword(request.user.sub, dto);
+  }
+
   @Get(':id')
   @Audited(AUDIT_ACTIONS.USER_VIEWED, { resourceType: 'USER', resourceParam: 'id' })
   @RequirePermissions('users.read')
@@ -80,14 +107,16 @@ export class UsersController {
   @Patch(':id')
   @Audited(AUDIT_ACTIONS.USER_UPDATED, { resourceType: 'USER', resourceParam: 'id' })
   @RequirePermissions('users.update')
-  @ApiOperation({ summary: 'Actualizar perfil profesional o contraseña del usuario' })
+  @ApiOperation({ summary: 'Actualizar identidad y perfil profesional del usuario' })
   @ApiResponse({ status: 200, type: UserResponseDto })
   @ApiNotFoundResponse({ description: 'Usuario no encontrado.' })
+  @ApiConflictResponse({ description: 'Email, usuario o documento ya utilizado.' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateUserDto,
+    @Request() request: AuthRequest,
   ): Promise<UserResponseDto> {
-    return this.usersService.update(id, dto);
+    return this.usersService.update(id, dto, request.user.sub);
   }
 
   @Patch(':id/deactivate')
@@ -99,8 +128,27 @@ export class UsersController {
   })
   @ApiResponse({ status: 200, type: UserResponseDto })
   @ApiNotFoundResponse({ description: 'Usuario no encontrado.' })
-  deactivate(@Param('id', ParseUUIDPipe) id: string): Promise<UserResponseDto> {
-    return this.usersService.deactivate(id);
+  @ApiForbiddenResponse({ description: 'No se permite desactivar la cuenta propia.' })
+  @ApiConflictResponse({ description: 'Debe permanecer al menos un administrador activo.' })
+  deactivate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() request: AuthRequest,
+  ): Promise<UserResponseDto> {
+    return this.usersService.deactivate(id, request.user.sub);
+  }
+
+  @Patch(':id/reactivate')
+  @Audited(AUDIT_ACTIONS.USER_REACTIVATED, { resourceType: 'USER', resourceParam: 'id' })
+  @RequirePermissions('admin.users.manage')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reactivar una cuenta de usuario y mantener sus sesiones revocadas' })
+  @ApiResponse({ status: 200, type: UserResponseDto })
+  @ApiNotFoundResponse({ description: 'Usuario no encontrado.' })
+  reactivate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() request: AuthRequest,
+  ): Promise<UserResponseDto> {
+    return this.usersService.reactivate(id, request.user.sub);
   }
 
   @Patch(':id/role')
@@ -110,10 +158,33 @@ export class UsersController {
   @ApiOperation({ summary: 'Asignar o reemplazar el rol de un usuario' })
   @ApiResponse({ status: 200, type: UserResponseDto })
   @ApiNotFoundResponse({ description: 'Usuario o rol no encontrado.' })
+  @ApiForbiddenResponse({ description: 'Cuenta propia o rol con permisos superiores a los del actor.' })
+  @ApiConflictResponse({ description: 'Debe permanecer al menos un administrador activo.' })
   assignRole(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignRoleDto,
+    @Request() request: AuthRequest,
   ): Promise<UserResponseDto> {
-    return this.usersService.assignRole(id, dto);
+    return this.usersService.assignRole(id, dto, {
+      id: request.user.sub,
+      permissions: request.user.permissions,
+    });
+  }
+
+  @Patch(':id/password')
+  @Audited(AUDIT_ACTIONS.USER_PASSWORD_RESET, { resourceType: 'USER', resourceParam: 'id' })
+  @RequirePermissions('admin.users.manage')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Establecer una nueva contraseña y revocar todas las sesiones' })
+  @ApiResponse({ status: 200, type: UserResponseDto })
+  @ApiNotFoundResponse({ description: 'Usuario no encontrado.' })
+  @ApiBadRequestResponse({ description: 'La nueva contraseña coincide con la actual.' })
+  @ApiForbiddenResponse({ description: 'La cuenta propia usa el endpoint de cambio verificado.' })
+  resetPassword(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ResetUserPasswordDto,
+    @Request() request: AuthRequest,
+  ): Promise<UserResponseDto> {
+    return this.usersService.resetPassword(id, dto, request.user.sub);
   }
 }

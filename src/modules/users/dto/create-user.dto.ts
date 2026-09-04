@@ -84,12 +84,16 @@ export class CreateUserDto {
   roleKey?: string;
 
   @ApiProperty({
-    description: 'Contraseña (mínimo 8 caracteres). No se devuelve en ninguna respuesta.',
-    minLength: 8,
+    description:
+      'Contraseña inicial (mínimo 12 caracteres, una letra y un número). Nunca se devuelve.',
+    minLength: 12,
     writeOnly: true,
   })
   @IsString()
-  @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres.' })
+  @MinLength(12, { message: 'La contraseña debe tener al menos 12 caracteres.' })
   @MaxLength(100, { message: 'La contraseña no puede superar 100 caracteres.' })
+  @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, {
+    message: 'La contraseña debe incluir al menos una letra y un número.',
+  })
   password: string;
 }

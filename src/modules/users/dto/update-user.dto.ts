@@ -1,12 +1,22 @@
-import { OmitType, PartialType } from '@nestjs/swagger';
+import { ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
+import { DocumentType } from '@prisma/client';
+import { IsEnum, IsOptional } from 'class-validator';
 import { CreateUserDto } from './create-user.dto';
 
 /**
- * Campos editables del perfil profesional y password (opcional).
- * El email no es editable; sigue siendo el identificador de login.
- * Un cambio de contraseña a través de este endpoint requiere privilegio users.update.
- * El flujo de cambio de contraseña con verificación estará en auth (siguiente fase).
+ * Campos editables del perfil profesional.
+ * La contraseña se gestiona exclusivamente mediante endpoints dedicados que
+ * verifican la credencial actual o requieren el permiso administrativo fuerte.
  */
 export class UpdateUserDto extends PartialType(
-  OmitType(CreateUserDto, ['email', 'roleKey'] as const),
-) {}
+  OmitType(CreateUserDto, ['password', 'roleKey', 'documentType'] as const),
+) {
+  @ApiPropertyOptional({
+    enum: DocumentType,
+    nullable: true,
+    description: 'Tipo de documento; null elimina el valor previamente registrado.',
+  })
+  @IsOptional()
+  @IsEnum(DocumentType, { message: 'Tipo de documento inválido.' })
+  documentType?: DocumentType | null;
+}

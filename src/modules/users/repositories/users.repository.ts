@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, User } from '@prisma/client';
+import { DocumentStatus, Prisma, User } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
 
 const withRoles = {
@@ -28,6 +28,33 @@ const userWithPermissionsArgs = {
 
 export type UserWithPermissions = Prisma.UserGetPayload<typeof userWithPermissionsArgs>;
 
+const roleWithPermissionKeysArgs = {
+  include: {
+    rolePermissions: {
+      include: { permission: { select: { key: true } } },
+    },
+  },
+} as const;
+
+export type RoleWithPermissionKeys = Prisma.RoleGetPayload<
+  typeof roleWithPermissionKeysArgs
+>;
+
+export type GuardedUserMutationResult =
+  | { status: 'updated'; user: UserWithRoles }
+  | { status: 'not-found' }
+  | { status: 'last-administrator' };
+
+export type GuardedRoleAssignmentResult =
+  | GuardedUserMutationResult
+  | { status: 'role-not-found' }
+  | { status: 'stale-role' };
+
+export type GuardedUserCreateResult =
+  | { status: 'created'; user: UserWithRoles }
+  | { status: 'role-not-found' }
+  | { status: 'stale-role' };
+
 /**
  * UsersRepository — acceso a datos de usuarios a través de PrismaService.
  * Solo métodos de dominio; sin lógica de negocio.
@@ -39,6 +66,34 @@ export class UsersRepository {
 
   async create(data: Prisma.UserCreateInput): Promise<UserWithRoles> {
     return this.prisma.user.create({ data, ...withRoles });
+  }
+
+  async createWithRoleGuard(
+    data: Prisma.UserCreateInput,
+    roleId: string,
+    expectedRoleUpdatedAt: Date,
+  ): Promise<GuardedUserCreateResult> {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const role = await tx.role.findUnique({
+          where: { id: roleId },
+          select: { updatedAt: true },
+        });
+        if (!role) return { status: 'role-not-found' } as const;
+        if (role.updatedAt.getTime() !== expectedRoleUpdatedAt.getTime()) {
+          return { status: 'stale-role' } as const;
+        }
+        const user = await tx.user.create({
+          data: {
+            ...data,
+            userRoles: { create: { role: { connect: { id: roleId } } } },
+          },
+          ...withRoles,
+        });
+        return { status: 'created', user } as const;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   async findMany(): Promise<UserWithRoles[]> {
@@ -105,12 +160,60 @@ export class UsersRepository {
     );
   }
 
-  async deactivate(id: string): Promise<UserWithRoles> {
+  async deactivate(id: string, updatedBy: string): Promise<GuardedUserMutationResult> {
     return this.prisma.$transaction(
       async (tx) => {
+        const existing = await tx.user.findUnique({ where: { id }, ...withRoles });
+        if (!existing) return { status: 'not-found' } as const;
+        if (!existing.isActive) return { status: 'updated', user: existing } as const;
+
+        const isAdministrator = existing.userRoles.some(
+          ({ role }) => role.key === 'ADMINISTRADOR',
+        );
+        if (isAdministrator) {
+          const activeAdministrators = await tx.user.count({
+            where: {
+              isActive: true,
+              userRoles: { some: { role: { key: 'ADMINISTRADOR' } } },
+            },
+          });
+          if (activeAdministrators <= 1) return { status: 'last-administrator' } as const;
+        }
+
         const user = await tx.user.update({
           where: { id },
-          data: { isActive: false, sessionVersion: { increment: 1 } },
+          data: { isActive: false, updatedBy, sessionVersion: { increment: 1 } },
+          ...withRoles,
+        });
+        await tx.refreshToken.deleteMany({ where: { userId: id } });
+        await tx.medicalDocument.updateMany({
+          where: {
+            status: DocumentStatus.PROCESSED,
+            assignedReviewerId: id,
+          },
+          data: {
+            assignedReviewerId: null,
+            assignedAt: null,
+            updatedBy,
+            version: { increment: 1 },
+          },
+        });
+        return { status: 'updated', user } as const;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  async reactivate(id: string, updatedBy: string): Promise<UserWithRoles | null> {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const existing = await tx.user.findUnique({ where: { id }, ...withRoles });
+        if (!existing) return null;
+        if (existing.isActive) return existing;
+
+        const user = await tx.user.update({
+          where: { id },
+          data: { isActive: true, updatedBy, sessionVersion: { increment: 1 } },
           ...withRoles,
         });
         await tx.refreshToken.deleteMany({ where: { userId: id } });
@@ -120,17 +223,105 @@ export class UsersRepository {
     );
   }
 
-  async assignRole(userId: string, roleId: string): Promise<UserWithRoles> {
+  async assignRole(
+    userId: string,
+    roleId: string,
+    expectedRoleUpdatedAt: Date,
+    updatedBy: string,
+  ): Promise<GuardedRoleAssignmentResult> {
     return this.prisma.$transaction(
       async (tx) => {
+        const existing = await tx.user.findUnique({ where: { id: userId }, ...withRoles });
+        if (!existing) return { status: 'not-found' } as const;
+        const nextRole = await tx.role.findUnique({
+          where: { id: roleId },
+          select: { key: true, updatedAt: true },
+        });
+        if (!nextRole) return { status: 'role-not-found' } as const;
+        if (nextRole.updatedAt.getTime() !== expectedRoleUpdatedAt.getTime()) {
+          return { status: 'stale-role' } as const;
+        }
+
+        const removesAdministrator =
+          existing.isActive &&
+          existing.userRoles.some(({ role }) => role.key === 'ADMINISTRADOR') &&
+          nextRole.key !== 'ADMINISTRADOR';
+        if (removesAdministrator) {
+          const activeAdministrators = await tx.user.count({
+            where: {
+              isActive: true,
+              userRoles: { some: { role: { key: 'ADMINISTRADOR' } } },
+            },
+          });
+          if (activeAdministrators <= 1) return { status: 'last-administrator' } as const;
+        }
+
         await tx.userRole.deleteMany({ where: { userId } });
         await tx.userRole.create({ data: { userId, roleId } });
         await tx.user.update({
           where: { id: userId },
-          data: { sessionVersion: { increment: 1 } },
+          data: { updatedBy, sessionVersion: { increment: 1 } },
         });
         await tx.refreshToken.deleteMany({ where: { userId } });
-        return tx.user.findUniqueOrThrow({ where: { id: userId }, ...withRoles });
+
+        const eligibleReviewer = await tx.user.findFirst({
+          where: {
+            id: userId,
+            isActive: true,
+            AND: [
+              {
+                userRoles: {
+                  some: {
+                    role: {
+                      rolePermissions: {
+                        some: { permission: { key: 'review.read' } },
+                      },
+                    },
+                  },
+                },
+              },
+              {
+                userRoles: {
+                  some: {
+                    role: {
+                      rolePermissions: {
+                        some: { permission: { key: 'documents.validate' } },
+                      },
+                    },
+                  },
+                },
+              },
+              {
+                userRoles: {
+                  some: {
+                    role: {
+                      rolePermissions: {
+                        some: { permission: { key: 'documents.read' } },
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+          select: { id: true },
+        });
+        if (!eligibleReviewer) {
+          await tx.medicalDocument.updateMany({
+            where: {
+              status: DocumentStatus.PROCESSED,
+              assignedReviewerId: userId,
+            },
+            data: {
+              assignedReviewerId: null,
+              assignedAt: null,
+              updatedBy,
+              version: { increment: 1 },
+            },
+          });
+        }
+        const user = await tx.user.findUniqueOrThrow({ where: { id: userId }, ...withRoles });
+        return { status: 'updated', user } as const;
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -138,6 +329,13 @@ export class UsersRepository {
 
   async findRoleByKey(key: string) {
     return this.prisma.role.findUnique({ where: { key } });
+  }
+
+  async findRoleByKeyWithPermissions(key: string): Promise<RoleWithPermissionKeys | null> {
+    return this.prisma.role.findUnique({
+      where: { key },
+      ...roleWithPermissionKeysArgs,
+    });
   }
 
   /** Para uso exclusivo de auth — devuelve usuario con árbol de permisos. */

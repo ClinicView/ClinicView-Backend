@@ -26,7 +26,21 @@ const mockUsersService = {
   findOne: jest.fn().mockResolvedValue(mockResponse),
   update: jest.fn().mockResolvedValue(mockResponse),
   deactivate: jest.fn().mockResolvedValue({ ...mockResponse, isActive: false }),
+  reactivate: jest.fn().mockResolvedValue(mockResponse),
   assignRole: jest.fn().mockResolvedValue(mockResponse),
+  resetPassword: jest.fn().mockResolvedValue(mockResponse),
+  changeMyPassword: jest.fn().mockResolvedValue(undefined),
+};
+
+const request = {
+  user: {
+    sub: 'b1b2c3d4-0000-0000-0000-000000000002',
+    email: 'admin@hospital.org',
+    username: 'admin',
+    permissions: ['users.create', 'admin.users.manage'],
+    sessionVersion: 0,
+    tokenType: 'access' as const,
+  },
 };
 
 describe('UsersController', () => {
@@ -47,10 +61,13 @@ describe('UsersController', () => {
       username: 'xuser',
       firstName: 'X',
       lastName: 'User',
-      password: 'pass1234',
+      password: 'password1234',
     };
-    const result = await controller.create(dto);
-    expect(mockUsersService.create).toHaveBeenCalledWith(dto);
+    const result = await controller.create(dto, request);
+    expect(mockUsersService.create).toHaveBeenCalledWith(dto, {
+      id: request.user.sub,
+      permissions: request.user.permissions,
+    });
     expect(result).toEqual(mockResponse);
   });
 
@@ -65,7 +82,18 @@ describe('UsersController', () => {
   });
 
   it('deactivate devuelve el usuario con isActive=false', async () => {
-    const result = await controller.deactivate(mockResponse.id);
+    const result = await controller.deactivate(mockResponse.id, request);
     expect(result.isActive).toBe(false);
+  });
+
+  it('reactivate atribuye la mutación al actor autenticado', async () => {
+    await controller.reactivate(mockResponse.id, request);
+    expect(mockUsersService.reactivate).toHaveBeenCalledWith(mockResponse.id, request.user.sub);
+  });
+
+  it('changeMyPassword no devuelve la credencial', async () => {
+    const dto = { currentPassword: 'current-pass-123', newPassword: 'new-password-123' };
+    await expect(controller.changeMyPassword(dto, request)).resolves.toBeUndefined();
+    expect(mockUsersService.changeMyPassword).toHaveBeenCalledWith(request.user.sub, dto);
   });
 });

@@ -7,6 +7,6 @@ export class PermissionResponseDto {
   @ApiProperty()
   key: string;
 
-  @ApiProperty({ required: false, nullable: true })
+  @ApiProperty({ required: false, nullable: true, type: String })
   description: string | null;
 }

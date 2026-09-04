@@ -1,15 +1,31 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { User } from '@prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, User } from '@prisma/client';
 import { HashingService } from '../../core/security/hashing.service';
 import { AssignRoleDto } from './dto/assign-role.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { ChangeMyPasswordDto, ResetUserPasswordDto } from './dto/password.dto';
 import { UserResponseDto } from './dto/user-response.dto';
-import { type UserWithRoles, UsersRepository } from './repositories/users.repository';
+import {
+  type RoleWithPermissionKeys,
+  type UserWithRoles,
+  UsersRepository,
+} from './repositories/users.repository';
 
 export interface UserWithPermissionKeys {
   user: User;
   permissionKeys: string[];
+}
+
+export interface UserMutationActor {
+  id: string;
+  permissions: string[];
 }
 
 @Injectable()
@@ -25,32 +41,59 @@ export class UsersService {
     return this.usersRepository.searchActiveProfessionals(query.trim());
   }
 
-  async create(dto: CreateUserDto): Promise<UserResponseDto> {
-    await this.ensureUniqueIdentity(dto.email, dto.username, dto.documentNumber);
+  async create(dto: CreateUserDto, actor: UserMutationActor): Promise<UserResponseDto> {
+    const email = dto.email.trim().toLowerCase();
+    const username = dto.username.trim().toLowerCase();
+    const documentNumber = this.emptyToNull(dto.documentNumber);
+    await this.ensureUniqueIdentity(email, username, documentNumber ?? undefined);
 
-    const role = dto.roleKey ? await this.usersRepository.findRoleByKey(dto.roleKey) : null;
+    const role = dto.roleKey
+      ? await this.usersRepository.findRoleByKeyWithPermissions(dto.roleKey)
+      : null;
     if (dto.roleKey && !role) throw new NotFoundException(`Rol '${dto.roleKey}' no encontrado.`);
+    if (role) this.assertCanAssignRole(actor.permissions, role);
 
     const passwordHash = await this.hashingService.hash(dto.password);
     const fullName = this.buildFullName(dto.firstName, dto.lastName);
-
-    let user = await this.usersRepository.create({
-      email: dto.email,
-      username: dto.username,
-      firstName: dto.firstName,
-      lastName: dto.lastName,
+    const userData: Prisma.UserCreateInput = {
+      email,
+      username,
+      firstName: dto.firstName.trim(),
+      lastName: dto.lastName.trim(),
       fullName,
       documentType: dto.documentType,
-      documentNumber: this.emptyToNull(dto.documentNumber),
+      documentNumber,
       profession: this.emptyToNull(dto.profession),
       passwordHash,
-    });
+      createdBy: actor.id,
+      updatedBy: actor.id,
+    };
 
-    if (role) {
-      user = await this.usersRepository.assignRole(user.id, role.id);
+    try {
+      let user: UserWithRoles;
+      if (role) {
+        const result = await this.usersRepository.createWithRoleGuard(
+          userData,
+          role.id,
+          role.updatedAt,
+        );
+        if (result.status === 'role-not-found') {
+          throw new NotFoundException(`Rol '${dto.roleKey}' no encontrado.`);
+        }
+        if (result.status === 'stale-role') {
+          throw new ConflictException(
+            'El rol cambió durante la creación. Revisa sus permisos e intenta nuevamente.',
+          );
+        }
+        user = result.user;
+      } else {
+        user = await this.usersRepository.create(userData);
+      }
+      return this.toResponse(user);
+    } catch (error) {
+      this.rethrowPersistenceConflict(error);
+      throw error;
     }
-
-    return this.toResponse(user);
   }
 
   async findAll(): Promise<UserResponseDto[]> {
@@ -64,19 +107,31 @@ export class UsersService {
     return this.toResponse(user);
   }
 
-  async update(id: string, dto: UpdateUserDto): Promise<UserResponseDto> {
+  async update(id: string, dto: UpdateUserDto, actorId: string): Promise<UserResponseDto> {
     const existing = await this.usersRepository.findById(id);
     if (!existing) throw new NotFoundException('Usuario no encontrado.');
 
+    if (dto.email !== undefined) {
+      const normalizedEmail = dto.email.trim().toLowerCase();
+      const sameEmail = await this.usersRepository.findByEmail(normalizedEmail);
+      if (sameEmail && sameEmail.id !== id) {
+        throw new ConflictException('El email ya está registrado en el sistema.');
+      }
+    }
+
     if (dto.username !== undefined) {
-      const sameUsername = await this.usersRepository.findByUsername(dto.username);
+      const sameUsername = await this.usersRepository.findByUsername(
+        dto.username.trim().toLowerCase(),
+      );
       if (sameUsername && sameUsername.id !== id) {
         throw new ConflictException('El nombre de usuario ya está registrado en el sistema.');
       }
     }
 
     if (dto.documentNumber !== undefined && dto.documentNumber !== '') {
-      const sameDocument = await this.usersRepository.findByDocumentNumber(dto.documentNumber);
+      const sameDocument = await this.usersRepository.findByDocumentNumber(
+        dto.documentNumber.trim(),
+      );
       if (sameDocument && sameDocument.id !== id) {
         throw new ConflictException('El documento ya está registrado en el sistema.');
       }
@@ -85,6 +140,7 @@ export class UsersService {
     const firstName = dto.firstName ?? existing.firstName;
     const lastName = dto.lastName ?? existing.lastName;
     const data: Partial<{
+      email: string;
       username: string;
       firstName: string;
       lastName: string;
@@ -92,45 +148,153 @@ export class UsersService {
       documentType: typeof dto.documentType;
       documentNumber: string | null;
       profession: string | null;
-      passwordHash: string;
+      updatedBy: string;
     }> = {};
 
-    if (dto.username !== undefined) data.username = dto.username;
-    if (dto.firstName !== undefined) data.firstName = dto.firstName;
-    if (dto.lastName !== undefined) data.lastName = dto.lastName;
+    if (dto.email !== undefined) data.email = dto.email.trim().toLowerCase();
+    if (dto.username !== undefined) data.username = dto.username.trim().toLowerCase();
+    if (dto.firstName !== undefined) data.firstName = dto.firstName.trim();
+    if (dto.lastName !== undefined) data.lastName = dto.lastName.trim();
     if (dto.firstName !== undefined || dto.lastName !== undefined) {
       data.fullName = this.buildFullName(firstName, lastName);
     }
     if (dto.documentType !== undefined) data.documentType = dto.documentType;
     if (dto.documentNumber !== undefined) data.documentNumber = this.emptyToNull(dto.documentNumber);
     if (dto.profession !== undefined) data.profession = this.emptyToNull(dto.profession);
-    if (dto.password !== undefined) {
-      data.passwordHash = await this.hashingService.hash(dto.password);
+    data.updatedBy = actorId;
+
+    try {
+      const user = dto.email !== undefined && dto.email.trim().toLowerCase() !== existing.email
+        ? await this.usersRepository.updateAndRevokeSessions(id, data)
+        : await this.usersRepository.update(id, data);
+      return this.toResponse(user);
+    } catch (error) {
+      this.rethrowPersistenceConflict(error);
+      throw error;
+    }
+  }
+
+  async deactivate(id: string, actorId: string): Promise<UserResponseDto> {
+    if (id === actorId) {
+      throw new ForbiddenException('No puedes desactivar tu propia cuenta.');
+    }
+    let result;
+    try {
+      result = await this.usersRepository.deactivate(id, actorId);
+    } catch (error) {
+      this.rethrowPersistenceConflict(error);
+      throw error;
+    }
+    if (result.status === 'not-found') throw new NotFoundException('Usuario no encontrado.');
+    if (result.status === 'last-administrator') {
+      throw new ConflictException('Debe permanecer al menos un administrador activo.');
+    }
+    return this.toResponse(result.user);
+  }
+
+  async reactivate(id: string, actorId: string): Promise<UserResponseDto> {
+    let user;
+    try {
+      user = await this.usersRepository.reactivate(id, actorId);
+    } catch (error) {
+      this.rethrowPersistenceConflict(error);
+      throw error;
+    }
+    if (!user) throw new NotFoundException('Usuario no encontrado.');
+    return this.toResponse(user);
+  }
+
+  async assignRole(
+    id: string,
+    dto: AssignRoleDto,
+    actor: UserMutationActor,
+  ): Promise<UserResponseDto> {
+    if (id === actor.id) {
+      throw new ForbiddenException('No puedes modificar tu propio rol.');
+    }
+    const role = await this.usersRepository.findRoleByKeyWithPermissions(dto.roleKey);
+    if (!role) throw new NotFoundException(`Rol '${dto.roleKey}' no encontrado.`);
+    this.assertCanAssignRole(actor.permissions, role);
+
+    let result;
+    try {
+      result = await this.usersRepository.assignRole(
+        id,
+        role.id,
+        role.updatedAt,
+        actor.id,
+      );
+    } catch (error) {
+      this.rethrowPersistenceConflict(error);
+      throw error;
+    }
+    if (result.status === 'not-found') throw new NotFoundException('Usuario no encontrado.');
+    if (result.status === 'role-not-found') throw new NotFoundException('Rol no encontrado.');
+    if (result.status === 'stale-role') {
+      throw new ConflictException(
+        'El rol cambió durante la asignación. Revisa sus permisos e intenta nuevamente.',
+      );
+    }
+    if (result.status === 'last-administrator') {
+      throw new ConflictException('Debe permanecer al menos un administrador activo.');
+    }
+    return this.toResponse(result.user);
+  }
+
+  async resetPassword(
+    id: string,
+    dto: ResetUserPasswordDto,
+    actorId: string,
+  ): Promise<UserResponseDto> {
+    if (id === actorId) {
+      throw new ForbiddenException(
+        'Para cambiar tu propia contraseña utiliza el flujo con verificación de credencial actual.',
+      );
+    }
+    const existing = await this.usersRepository.findById(id);
+    if (!existing) throw new NotFoundException('Usuario no encontrado.');
+    if (await this.hashingService.compare(dto.newPassword, existing.passwordHash)) {
+      throw new BadRequestException('La nueva contraseña debe ser diferente de la actual.');
     }
 
-    const user = dto.password !== undefined
-      ? await this.usersRepository.updateAndRevokeSessions(id, data)
-      : await this.usersRepository.update(id, data);
-    return this.toResponse(user);
+    const passwordHash = await this.hashingService.hash(dto.newPassword);
+    try {
+      const user = await this.usersRepository.updateAndRevokeSessions(id, {
+        passwordHash,
+        updatedBy: actorId,
+      });
+      return this.toResponse(user);
+    } catch (error) {
+      this.rethrowPersistenceConflict(error);
+      throw error;
+    }
   }
 
-  async deactivate(id: string): Promise<UserResponseDto> {
-    const existing = await this.usersRepository.findById(id);
-    if (!existing) throw new NotFoundException('Usuario no encontrado.');
+  async changeMyPassword(
+    actorId: string,
+    dto: ChangeMyPasswordDto,
+  ): Promise<void> {
+    const existing = await this.usersRepository.findById(actorId);
+    if (!existing || !existing.isActive) throw new NotFoundException('Usuario no encontrado.');
+    const currentMatches = await this.hashingService.compare(
+      dto.currentPassword,
+      existing.passwordHash,
+    );
+    if (!currentMatches) throw new BadRequestException('La contraseña actual no es correcta.');
+    if (await this.hashingService.compare(dto.newPassword, existing.passwordHash)) {
+      throw new BadRequestException('La nueva contraseña debe ser diferente de la actual.');
+    }
 
-    const user = await this.usersRepository.deactivate(id);
-    return this.toResponse(user);
-  }
-
-  async assignRole(id: string, dto: AssignRoleDto): Promise<UserResponseDto> {
-    const existing = await this.usersRepository.findById(id);
-    if (!existing) throw new NotFoundException('Usuario no encontrado.');
-
-    const role = await this.usersRepository.findRoleByKey(dto.roleKey);
-    if (!role) throw new NotFoundException(`Rol '${dto.roleKey}' no encontrado.`);
-
-    const user = await this.usersRepository.assignRole(id, role.id);
-    return this.toResponse(user);
+    const passwordHash = await this.hashingService.hash(dto.newPassword);
+    try {
+      await this.usersRepository.updateAndRevokeSessions(actorId, {
+        passwordHash,
+        updatedBy: actorId,
+      });
+    } catch (error) {
+      this.rethrowPersistenceConflict(error);
+      throw error;
+    }
   }
 
   /**
@@ -211,5 +375,35 @@ export class UsersService {
   private emptyToNull(value?: string): string | null {
     const trimmed = value?.trim();
     return trimmed ? trimmed : null;
+  }
+
+  private assertCanAssignRole(
+    actorPermissions: string[],
+    role: RoleWithPermissionKeys,
+  ): void {
+    if (!actorPermissions.includes('admin.users.manage')) {
+      throw new ForbiddenException('Se requiere administración de usuarios para asignar un rol.');
+    }
+    const actorPermissionSet = new Set(actorPermissions);
+    const unauthorized = role.rolePermissions
+      .map(({ permission }) => permission.key)
+      .filter((permission) => !actorPermissionSet.has(permission));
+    if (unauthorized.length > 0) {
+      throw new ForbiddenException(
+        'No puedes asignar un rol con permisos superiores a los tuyos.',
+      );
+    }
+  }
+
+  private rethrowPersistenceConflict(error: unknown): void {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return;
+    if (error.code === 'P2002') {
+      throw new ConflictException('El email, usuario o documento ya está registrado.');
+    }
+    if (error.code === 'P2034') {
+      throw new ConflictException(
+        'Otra operación modificó la cuenta al mismo tiempo. Intenta nuevamente.',
+      );
+    }
   }
 }

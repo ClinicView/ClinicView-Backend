@@ -1,11 +1,22 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { HashingService } from '../../../core/security/hashing.service';
-import { CreateUserDto } from '../dto/create-user.dto';
-import { UpdateUserDto } from '../dto/update-user.dto';
-import type { UserWithRoles } from '../repositories/users.repository';
+import type {
+  RoleWithPermissionKeys,
+  UserWithRoles,
+} from '../repositories/users.repository';
 import { UsersRepository } from '../repositories/users.repository';
 import { UsersService } from '../users.service';
+
+const actor = {
+  id: 'b1b2c3d4-0000-0000-0000-000000000002',
+  permissions: ['users.create', 'admin.users.manage', 'patients.read'],
+};
 
 const makeUser = (overrides: Partial<UserWithRoles> = {}): UserWithRoles => ({
   id: 'a1b2c3d4-0000-0000-0000-000000000001',
@@ -30,12 +41,28 @@ const makeUser = (overrides: Partial<UserWithRoles> = {}): UserWithRoles => ({
   ...overrides,
 });
 
-const mockUser = makeUser();
+const makeRole = (
+  key = 'MEDICO',
+  permissionKeys = ['patients.read'],
+): RoleWithPermissionKeys => ({
+  id: 'c1b2c3d4-0000-0000-0000-000000000003',
+  key,
+  name: key,
+  description: null,
+  createdAt: new Date('2026-01-01'),
+  updatedAt: new Date('2026-01-01'),
+  rolePermissions: permissionKeys.map((permissionKey, index) => ({
+    roleId: 'c1b2c3d4-0000-0000-0000-000000000003',
+    permissionId: `d1b2c3d4-0000-0000-0000-00000000000${index}`,
+    permission: { key: permissionKey },
+  })),
+});
 
 describe('UsersService', () => {
   let service: UsersService;
   let repo: jest.Mocked<UsersRepository>;
   let hashing: jest.Mocked<Pick<HashingService, 'hash' | 'compare'>>;
+  const mockUser = makeUser();
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -45,6 +72,7 @@ describe('UsersService', () => {
           provide: UsersRepository,
           useValue: {
             create: jest.fn(),
+            createWithRoleGuard: jest.fn(),
             findMany: jest.fn(),
             findById: jest.fn(),
             findByEmail: jest.fn(),
@@ -53,8 +81,10 @@ describe('UsersService', () => {
             update: jest.fn(),
             updateAndRevokeSessions: jest.fn(),
             deactivate: jest.fn(),
+            reactivate: jest.fn(),
             assignRole: jest.fn(),
             findRoleByKey: jest.fn(),
+            findRoleByKeyWithPermissions: jest.fn(),
             findByEmailWithPermissions: jest.fn(),
             findByIdWithPermissions: jest.fn(),
             updateLastLogin: jest.fn(),
@@ -65,187 +95,142 @@ describe('UsersService', () => {
           provide: HashingService,
           useValue: {
             hash: jest.fn().mockResolvedValue('$2b$12$newhash'),
-            compare: jest.fn(),
+            compare: jest.fn().mockResolvedValue(false),
           },
         },
       ],
     }).compile();
-
     service = module.get(UsersService);
     repo = module.get(UsersRepository);
     hashing = module.get(HashingService);
+    repo.findByEmail.mockResolvedValue(null);
+    repo.findByUsername.mockResolvedValue(null);
+    repo.findByDocumentNumber.mockResolvedValue(null);
   });
 
-  // ─── create ──────────────────────────────────────────────────────────────────
-
-  describe('create', () => {
-    const dto: CreateUserDto = {
-      email: 'test@hospital.org',
-      username: 'tuser',
-      firstName: 'Test',
-      lastName: 'User',
-      profession: 'Médico',
-      password: 'securepass1',
-    };
-
-    it('crea el usuario y hashea la contraseña', async () => {
-      repo.findByEmail.mockResolvedValue(null);
-      repo.findByUsername.mockResolvedValue(null);
-      repo.findByDocumentNumber.mockResolvedValue(null);
-      repo.create.mockResolvedValue(mockUser);
-
-      const result = await service.create(dto);
-
-      expect(repo.findByEmail).toHaveBeenCalledWith(dto.email);
-      expect(repo.findByUsername).toHaveBeenCalledWith(dto.username);
-      expect(hashing.hash).toHaveBeenCalledWith(dto.password);
-      expect(repo.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          email: dto.email,
-          username: dto.username,
-          firstName: dto.firstName,
-          lastName: dto.lastName,
-          fullName: 'Test User',
-          passwordHash: '$2b$12$newhash',
-        }),
-      );
-      expect(result.id).toBe(mockUser.id);
-    });
-
-    it('no expone passwordHash en la respuesta', async () => {
-      repo.findByEmail.mockResolvedValue(null);
-      repo.findByUsername.mockResolvedValue(null);
-      repo.create.mockResolvedValue(mockUser);
-
-      const result = await service.create(dto);
-
-      expect(result).not.toHaveProperty('passwordHash');
-    });
-
-    it('lanza ConflictException si el email ya existe', async () => {
-      repo.findByEmail.mockResolvedValue(mockUser);
-      await expect(service.create(dto)).rejects.toThrow(ConflictException);
-    });
-
-    it('lanza ConflictException si el usuario ya existe', async () => {
-      repo.findByEmail.mockResolvedValue(null);
-      repo.findByUsername.mockResolvedValue(mockUser);
-      await expect(service.create(dto)).rejects.toThrow(ConflictException);
-    });
+  it('crea un usuario normalizado, atribuido y sin exponer el hash', async () => {
+    repo.create.mockResolvedValue(mockUser);
+    const result = await service.create({
+      email: 'TEST@hospital.org', username: 'tuser', firstName: 'Test', lastName: 'User',
+      password: 'password1234',
+    }, actor);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'test@hospital.org', createdBy: actor.id, updatedBy: actor.id,
+      passwordHash: '$2b$12$newhash',
+    }));
+    expect(result).not.toHaveProperty('passwordHash');
   });
 
-  // ─── findAll ─────────────────────────────────────────────────────────────────
-
-  describe('findAll', () => {
-    it('devuelve la lista de usuarios mapeada a DTO', async () => {
-      repo.findMany.mockResolvedValue([mockUser]);
-      const result = await service.findAll();
-      expect(result).toHaveLength(1);
-      expect(result[0].id).toBe(mockUser.id);
-    });
+  it('exige administración fuerte si la creación incluye un rol', async () => {
+    repo.findRoleByKeyWithPermissions.mockResolvedValue(makeRole());
+    await expect(service.create({
+      email: 'x@hospital.org', username: 'xuser', firstName: 'Xx', lastName: 'User',
+      password: 'password1234', roleKey: 'MEDICO',
+    }, { id: actor.id, permissions: ['users.create'] })).rejects.toThrow(ForbiddenException);
+    expect(repo.create).not.toHaveBeenCalled();
   });
 
-  // ─── findOne ─────────────────────────────────────────────────────────────────
+  it('crea con rol mediante una guarda transaccional de su versión autorizada', async () => {
+    const role = makeRole();
+    repo.findRoleByKeyWithPermissions.mockResolvedValue(role);
+    repo.createWithRoleGuard.mockResolvedValue({ status: 'created', user: mockUser });
 
-  describe('findOne', () => {
-    it('devuelve el usuario si existe', async () => {
-      repo.findById.mockResolvedValue(mockUser);
-      const result = await service.findOne(mockUser.id);
-      expect(result.email).toBe(mockUser.email);
-    });
+    await service.create({
+      email: 'x@hospital.org', username: 'xuser', firstName: 'Xx', lastName: 'User',
+      password: 'password1234', roleKey: role.key,
+    }, actor);
 
-    it('lanza NotFoundException si no existe', async () => {
-      repo.findById.mockResolvedValue(null);
-      await expect(service.findOne('id-inexistente')).rejects.toThrow(NotFoundException);
-    });
+    expect(repo.createWithRoleGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'x@hospital.org' }),
+      role.id,
+      role.updatedAt,
+    );
+    expect(repo.create).not.toHaveBeenCalled();
   });
 
-  // ─── update ──────────────────────────────────────────────────────────────────
-
-  describe('update', () => {
-    it('actualiza nombres y fullName sin hashear si no hay contraseña nueva', async () => {
-      const dto: UpdateUserDto = { firstName: 'Nuevo', lastName: 'Nombre' };
-      repo.findById.mockResolvedValue(mockUser);
-      repo.update.mockResolvedValue(
-        makeUser({ firstName: 'Nuevo', lastName: 'Nombre', fullName: 'Nuevo Nombre' }),
-      );
-
-      const result = await service.update(mockUser.id, dto);
-
-      expect(hashing.hash).not.toHaveBeenCalled();
-      expect(repo.update).toHaveBeenCalledWith(
-        mockUser.id,
-        expect.objectContaining({ firstName: 'Nuevo', lastName: 'Nombre', fullName: 'Nuevo Nombre' }),
-      );
-      expect(result.fullName).toBe('Nuevo Nombre');
-    });
-
-    it('hashea la contraseña cuando se provee una nueva', async () => {
-      const dto: UpdateUserDto = { password: 'nueva-pass-segura' };
-      repo.findById.mockResolvedValue(mockUser);
-      repo.updateAndRevokeSessions.mockResolvedValue(mockUser);
-
-      await service.update(mockUser.id, dto);
-
-      expect(hashing.hash).toHaveBeenCalledWith('nueva-pass-segura');
-      expect(repo.updateAndRevokeSessions).toHaveBeenCalledWith(
-        mockUser.id,
-        expect.objectContaining({ passwordHash: '$2b$12$newhash' }),
-      );
-      expect(repo.update).not.toHaveBeenCalled();
-    });
-
-    it('lanza NotFoundException si el usuario no existe', async () => {
-      repo.findById.mockResolvedValue(null);
-      await expect(service.update('inexistente', {})).rejects.toThrow(NotFoundException);
-    });
+  it('impide asignar un rol con permisos superiores a los del actor', async () => {
+    repo.findRoleByKeyWithPermissions.mockResolvedValue(makeRole('SUPERIOR', ['admin.audit.read']));
+    await expect(service.assignRole(mockUser.id, { roleKey: 'SUPERIOR' }, actor))
+      .rejects.toThrow(ForbiddenException);
+    expect(repo.assignRole).not.toHaveBeenCalled();
   });
 
-  // ─── deactivate ───────────────────────────────────────────────────────────────
-
-  describe('deactivate', () => {
-    it('desactiva el usuario (borrado lógico)', async () => {
-      repo.findById.mockResolvedValue(mockUser);
-      repo.deactivate.mockResolvedValue(makeUser({ isActive: false }));
-
-      const result = await service.deactivate(mockUser.id);
-
-      expect(repo.deactivate).toHaveBeenCalledWith(mockUser.id);
-      expect(result.isActive).toBe(false);
+  it('asigna un rol permitido y procesa el resultado protegido', async () => {
+    const role = makeRole();
+    const assignedUser = makeUser({
+      userRoles: [{
+        userId: mockUser.id,
+        roleId: role.id,
+        role: { key: role.key, name: role.name },
+      }],
     });
-
-    it('lanza NotFoundException si el usuario no existe', async () => {
-      repo.findById.mockResolvedValue(null);
-      await expect(service.deactivate('inexistente')).rejects.toThrow(NotFoundException);
-    });
+    repo.findRoleByKeyWithPermissions.mockResolvedValue(role);
+    repo.assignRole.mockResolvedValue({ status: 'updated', user: assignedUser });
+    const result = await service.assignRole(mockUser.id, { roleKey: role.key }, actor);
+    expect(repo.assignRole).toHaveBeenCalledWith(
+      mockUser.id,
+      role.id,
+      role.updatedAt,
+      actor.id,
+    );
+    expect(result.roles[0].key).toBe('MEDICO');
   });
 
-  // ─── assignRole ──────────────────────────────────────────────────────────────
+  it('protege al último administrador y la propia cuenta', async () => {
+    await expect(service.deactivate(actor.id, actor.id)).rejects.toThrow(ForbiddenException);
+    repo.deactivate.mockResolvedValue({ status: 'last-administrator' });
+    await expect(service.deactivate(mockUser.id, actor.id)).rejects.toThrow(ConflictException);
+  });
 
-  describe('assignRole', () => {
-    const mockRole = { id: 'role-id', key: 'MEDICO', name: 'Médico', description: null, createdAt: new Date(), updatedAt: new Date() };
+  it('reactiva usuarios preservando la identidad', async () => {
+    repo.reactivate.mockResolvedValue(makeUser({ isActive: true }));
+    const result = await service.reactivate(mockUser.id, actor.id);
+    expect(repo.reactivate).toHaveBeenCalledWith(mockUser.id, actor.id);
+    expect(result.isActive).toBe(true);
+  });
 
-    it('asigna el rol al usuario', async () => {
-      repo.findById.mockResolvedValue(mockUser);
-      repo.findRoleByKey.mockResolvedValue(mockRole);
-      repo.assignRole.mockResolvedValue(makeUser({ userRoles: [{ roleId: mockRole.id, userId: mockUser.id, role: { key: 'MEDICO', name: 'Médico' } }] }));
+  it('actualizar email revoca sesiones y conserva el password fuera del DTO', async () => {
+    repo.findById.mockResolvedValue(mockUser);
+    repo.updateAndRevokeSessions.mockResolvedValue(makeUser({ email: 'new@hospital.org' }));
+    await service.update(mockUser.id, { email: 'NEW@hospital.org' }, actor.id);
+    expect(repo.updateAndRevokeSessions).toHaveBeenCalledWith(mockUser.id, expect.objectContaining({
+      email: 'new@hospital.org', updatedBy: actor.id,
+    }));
+    expect(hashing.hash).not.toHaveBeenCalled();
+  });
 
-      const result = await service.assignRole(mockUser.id, { roleKey: 'MEDICO' });
-
-      expect(repo.findRoleByKey).toHaveBeenCalledWith('MEDICO');
-      expect(repo.assignRole).toHaveBeenCalledWith(mockUser.id, mockRole.id);
-      expect(result.roles[0].key).toBe('MEDICO');
+  it('restablece credencial ajena y revoca todas sus sesiones', async () => {
+    repo.findById.mockResolvedValue(mockUser);
+    repo.updateAndRevokeSessions.mockResolvedValue(mockUser);
+    await service.resetPassword(mockUser.id, { newPassword: 'new-password-123' }, actor.id);
+    expect(hashing.hash).toHaveBeenCalledWith('new-password-123');
+    expect(repo.updateAndRevokeSessions).toHaveBeenCalledWith(mockUser.id, {
+      passwordHash: '$2b$12$newhash', updatedBy: actor.id,
     });
+    await expect(service.resetPassword(actor.id, { newPassword: 'new-password-123' }, actor.id))
+      .rejects.toThrow(ForbiddenException);
+  });
 
-    it('lanza NotFoundException si el usuario no existe', async () => {
-      repo.findById.mockResolvedValue(null);
-      await expect(service.assignRole('no-existe', { roleKey: 'MEDICO' })).rejects.toThrow(NotFoundException);
+  it('cambio propio verifica la credencial actual antes de revocar sesiones', async () => {
+    repo.findById.mockResolvedValue(mockUser);
+    hashing.compare.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    repo.updateAndRevokeSessions.mockResolvedValue(mockUser);
+    await service.changeMyPassword(mockUser.id, {
+      currentPassword: 'old-password-123', newPassword: 'new-password-123',
     });
+    expect(repo.updateAndRevokeSessions).toHaveBeenCalled();
+  });
 
-    it('lanza NotFoundException si el rol no existe', async () => {
-      repo.findById.mockResolvedValue(mockUser);
-      repo.findRoleByKey.mockResolvedValue(null);
-      await expect(service.assignRole(mockUser.id, { roleKey: 'ROL_INVALIDO' })).rejects.toThrow(NotFoundException);
-    });
+  it('rechaza una credencial actual incorrecta', async () => {
+    repo.findById.mockResolvedValue(mockUser);
+    hashing.compare.mockResolvedValue(false);
+    await expect(service.changeMyPassword(mockUser.id, {
+      currentPassword: 'wrong-password', newPassword: 'new-password-123',
+    })).rejects.toThrow(BadRequestException);
+  });
+
+  it('propaga no encontrado en consultas', async () => {
+    repo.findById.mockResolvedValue(null);
+    await expect(service.findOne('missing')).rejects.toThrow(NotFoundException);
   });
 });

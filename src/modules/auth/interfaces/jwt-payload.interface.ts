@@ -1,6 +1,7 @@
 export interface JwtPayload {
   sub: string;
   email: string;
+  username: string;
   permissions: string[];
   sessionVersion: number;
   tokenType: 'access';

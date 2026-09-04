@@ -32,9 +32,11 @@ function isRefreshJwtPayload(value: unknown): value is RefreshJwtPayload {
   );
 }
 
-function isAccessJwtPayload(value: unknown): value is JwtPayload {
+type AccessJwtEnvelope = Omit<JwtPayload, 'username'> & { username?: string };
+
+function isAccessJwtEnvelope(value: unknown): value is AccessJwtEnvelope {
   if (!value || typeof value !== 'object') return false;
-  const candidate = value as Partial<JwtPayload>;
+  const candidate = value as Partial<AccessJwtEnvelope>;
   return (
     typeof candidate.sub === 'string' &&
     candidate.sub.length > 0 &&
@@ -45,8 +47,17 @@ function isAccessJwtPayload(value: unknown): value is JwtPayload {
   );
 }
 
+function isAccessJwtPayload(value: unknown): value is JwtPayload {
+  return (
+    isAccessJwtEnvelope(value) &&
+    typeof value.username === 'string' &&
+    /^[a-zA-Z0-9._-]{3,50}$/.test(value.username)
+  );
+}
+
 export interface AuthSessionResult {
   actorId: string;
+  actorUsernameAtEvent: string;
   response: TokenResponseDto;
   refreshToken: string;
   rememberMe: boolean;
@@ -97,6 +108,7 @@ export class AuthService {
 
     return {
       actorId: payload.sub,
+      actorUsernameAtEvent: payload.username,
       response,
       refreshToken: refresh.token,
       rememberMe,
@@ -118,10 +130,7 @@ export class AuthService {
     }
 
     const current = await this.usersService.findByIdWithPermissions(stored.userId);
-    if (
-      !current?.user.isActive ||
-      current.user.sessionVersion !== stored.sessionVersion
-    ) {
+    if (!current?.user.isActive || current.user.sessionVersion !== stored.sessionVersion) {
       throw new UnauthorizedException('Usuario no disponible.');
     }
 
@@ -138,12 +147,7 @@ export class AuthService {
     const response = this.signAccessToken(accessPayload);
     const rotated = await this.refreshTokensRepo.rotate(
       oldHash,
-      this.toRefreshTokenWrite(
-        accessPayload,
-        nextRefresh,
-        stored.rememberMe,
-        stored.expiresAt,
-      ),
+      this.toRefreshTokenWrite(accessPayload, nextRefresh, stored.rememberMe, stored.expiresAt),
       now,
     );
     if (!rotated) {
@@ -152,6 +156,7 @@ export class AuthService {
 
     return {
       actorId: current.user.id,
+      actorUsernameAtEvent: current.user.username,
       response,
       refreshToken: nextRefresh.token,
       rememberMe: stored.rememberMe,
@@ -159,21 +164,23 @@ export class AuthService {
     };
   }
 
-  async logout(refreshToken: string | null): Promise<string | null> {
+  async logout(
+    refreshToken: string | null,
+  ): Promise<{ actorId: string; actorUsernameAtEvent: string } | null> {
     if (!refreshToken) return null;
-    return this.refreshTokensRepo.deleteByHash(hashToken(refreshToken));
+    const actor = await this.refreshTokensRepo.deleteByHash(hashToken(refreshToken));
+    return actor ? { actorId: actor.userId, actorUsernameAtEvent: actor.username } : null;
   }
 
   async validateAccessToken(payload: unknown): Promise<JwtPayload> {
-    if (!isAccessJwtPayload(payload)) {
+    // Tokens emitidos antes de incorporar el username siguen siendo válidos
+    // durante su corta vigencia; la identidad se rehidrata desde la BD abajo.
+    if (!isAccessJwtEnvelope(payload)) {
       throw new UnauthorizedException('Access token inválido.');
     }
 
     const current = await this.usersService.findByIdWithPermissions(payload.sub);
-    if (
-      !current?.user.isActive ||
-      current.user.sessionVersion !== payload.sessionVersion
-    ) {
+    if (!current?.user.isActive || current.user.sessionVersion !== payload.sessionVersion) {
       throw new UnauthorizedException('Access token revocado.');
     }
 
@@ -242,6 +249,7 @@ export class AuthService {
     return {
       sub: result.user.id,
       email: result.user.email,
+      username: result.user.username,
       permissions: [...new Set(result.permissionKeys)],
       sessionVersion: result.user.sessionVersion,
       tokenType: 'access',

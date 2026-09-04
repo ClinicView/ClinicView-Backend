@@ -12,6 +12,7 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
 } from 'class-validator';
 
 export class FindAuditEventsQueryDto {
@@ -44,6 +45,19 @@ export class FindAuditEventsQueryDto {
   @IsOptional()
   @IsUUID()
   actorId?: string;
+
+  @ApiPropertyOptional({
+    minLength: 3,
+    maxLength: 50,
+    example: 'mlopez',
+    description: 'Username histórico o actual del actor (coincidencia exacta).',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  @MaxLength(50)
+  @Matches(/^[a-zA-Z0-9._-]+$/)
+  actorUsername?: string;
 
   @ApiPropertyOptional({ type: String, format: 'uuid' })
   @IsOptional()

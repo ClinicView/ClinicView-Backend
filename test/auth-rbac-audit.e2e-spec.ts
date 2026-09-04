@@ -184,13 +184,50 @@ describe('Auth, RBAC y auditoría append-only (e2e)', () => {
     expect(rejectedQuery.response.status).toBe(400);
 
     const allowed = await jsonRequest<{
-      data: Array<{ action: string }>;
+      data: Array<{
+        action: string;
+        actorId: string | null;
+        actorUsernameAtEvent: string | null;
+        actor: { username: string; fullName: string; isActive: boolean } | null;
+      }>;
       nextCursor: string | null;
     }>(baseUrl, '/api/audit/events?limit=100', { headers: jsonHeaders(adminAccessToken) });
     expect(allowed.response.status).toBe(200);
     expect(Array.isArray(allowed.body.data)).toBe(true);
     expect(allowed.body.data.length).toBeGreaterThan(0);
     expect(allowed.response.headers.get('cache-control')).toContain('no-store');
+
+    const identified = allowed.body.data.find(
+      (event) => event.actorId === fixture.admin.id && event.actorUsernameAtEvent,
+    );
+    expect(identified?.actorUsernameAtEvent).toBe(fixture.admin.username);
+    expect(identified?.actor).toEqual({
+      username: fixture.admin.username,
+      fullName: 'Persona Sintética admin',
+      isActive: true,
+    });
+    expect(Object.keys(identified?.actor ?? {}).sort()).toEqual([
+      'fullName',
+      'isActive',
+      'username',
+    ]);
+
+    const byUsername = await jsonRequest<{
+      data: Array<{ actorId: string | null; actorUsernameAtEvent: string | null }>;
+    }>(
+      baseUrl,
+      `/api/audit/events?limit=100&actorUsername=${encodeURIComponent(fixture.admin.username)}`,
+      { headers: jsonHeaders(adminAccessToken) },
+    );
+    expect(byUsername.response.status).toBe(200);
+    expect(byUsername.body.data.length).toBeGreaterThan(0);
+    expect(
+      byUsername.body.data.every(
+        (event) =>
+          event.actorId === fixture.admin.id ||
+          event.actorUsernameAtEvent === fixture.admin.username,
+      ),
+    ).toBe(true);
   });
 
   it('revoca de inmediato access y refresh al cambiar el rol', async () => {
@@ -240,6 +277,18 @@ describe('Auth, RBAC y auditoría append-only (e2e)', () => {
       auditEvents.some(
         (event) => event.action === 'AUTH_LOGIN' && event.outcome === AuditOutcome.DENIED,
       ),
+    ).toBe(true);
+    expect(
+      auditEvents.some(
+        (event) =>
+          event.actorId === fixture.admin.id &&
+          event.actorUsernameAtEvent === fixture.admin.username,
+      ),
+    ).toBe(true);
+    expect(
+      auditEvents
+        .filter((event) => event.action === 'AUTH_LOGIN' && event.outcome === AuditOutcome.DENIED)
+        .every((event) => event.actorUsernameAtEvent === null),
     ).toBe(true);
 
     const serializedAudit = JSON.stringify(auditEvents);

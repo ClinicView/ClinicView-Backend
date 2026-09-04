@@ -8,6 +8,7 @@ describe('JwtStrategy', () => {
     const payload: JwtPayload = {
       sub: 'f9b3308d-cc74-4f30-823a-75ca624ff69f',
       email: 'user@hospital.org',
+      username: 'test.user',
       permissions: ['stale.permission'],
       sessionVersion: 1,
       tokenType: 'access',

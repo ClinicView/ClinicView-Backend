@@ -11,6 +11,7 @@ export interface RequestContextState {
   route: string;
   auditPolicy: AuditPolicy | null;
   actorId: string | null;
+  actorUsernameAtEvent: string | null;
   skipAudit: boolean;
 }
 
@@ -34,8 +35,10 @@ export class RequestContextService {
     state.skipAudit = skipAudit;
   }
 
-  setActor(actorId: string | null): void {
+  setActor(actorId: string | null, actorUsernameAtEvent: string | null = null): void {
     const state = this.storage.getStore();
-    if (state) state.actorId = actorId;
+    if (!state) return;
+    state.actorId = actorId;
+    state.actorUsernameAtEvent = actorId ? actorUsernameAtEvent : null;
   }
 }

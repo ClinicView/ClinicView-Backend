@@ -36,7 +36,10 @@ describe('RefreshTokensRepository', () => {
         update: jest.fn().mockResolvedValue(undefined),
       },
       refreshToken: {
-        findUnique: jest.fn().mockResolvedValue({ userId: input.userId }),
+        findUnique: jest.fn().mockResolvedValue({
+          userId: input.userId,
+          user: { username: 'mlopez' },
+        }),
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
         create: jest.fn().mockResolvedValue(undefined),
       },
@@ -116,10 +119,16 @@ describe('RefreshTokensRepository', () => {
       },
     });
 
-    await expect(repository.deleteByHash(input.tokenHash)).resolves.toBe(input.userId);
+    await expect(repository.deleteByHash(input.tokenHash)).resolves.toEqual({
+      userId: input.userId,
+      username: 'mlopez',
+    });
     expect(tx.refreshToken.findUnique).toHaveBeenCalledWith({
       where: { tokenHash: input.tokenHash },
-      select: { userId: true },
+      select: {
+        userId: true,
+        user: { select: { username: true } },
+      },
     });
     expect(tx.refreshToken.deleteMany).toHaveBeenCalledWith({
       where: { tokenHash: input.tokenHash, userId: input.userId },

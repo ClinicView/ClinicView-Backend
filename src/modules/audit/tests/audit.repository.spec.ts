@@ -17,6 +17,7 @@ function event(id: string, occurredAt: string): AuditEvent {
     action: 'PATIENT_VIEWED',
     outcome: AuditOutcome.SUCCESS,
     actorId: ACTOR_ID,
+    actorUsernameAtEvent: 'mlopez',
     patientId: PATIENT_ID,
     resourceType: 'PATIENT',
     resourceId: RESOURCE_ID,
@@ -49,6 +50,7 @@ describe('AuditRepository', () => {
       action: 'PATIENT_VIEWED',
       outcome: AuditOutcome.SUCCESS,
       actorId: ACTOR_ID,
+      actorUsername: 'mlopez',
       patientId: PATIENT_ID,
       resourceType: 'PATIENT',
       resourceId: RESOURCE_ID,
@@ -68,11 +70,21 @@ describe('AuditRepository', () => {
         action: 'PATIENT_VIEWED',
         outcome: AuditOutcome.SUCCESS,
         actorId: ACTOR_ID,
+        OR: [{ actorUsernameAtEvent: 'mlopez' }, { actor: { is: { username: 'mlopez' } } }],
         patientId: PATIENT_ID,
         resourceType: 'PATIENT',
         resourceId: RESOURCE_ID,
         requestId: REQUEST_ID,
         occurredAt: { gte: from, lte: to },
+      },
+      include: {
+        actor: {
+          select: {
+            username: true,
+            fullName: true,
+            isActive: true,
+          },
+        },
       },
       orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
       take: 3,
@@ -95,6 +107,15 @@ describe('AuditRepository', () => {
     });
     expect(findMany).toHaveBeenCalledWith({
       where: {},
+      include: {
+        actor: {
+          select: {
+            username: true,
+            fullName: true,
+            isActive: true,
+          },
+        },
+      },
       orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
       take: 3,
     });

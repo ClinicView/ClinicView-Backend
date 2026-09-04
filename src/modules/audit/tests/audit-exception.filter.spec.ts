@@ -59,7 +59,7 @@ describe('AuditExceptionFilter', () => {
       requestContext as unknown as RequestContextService,
     );
     const request = {
-      user: { sub: ACTOR_ID },
+      user: { sub: ACTOR_ID, username: 'mlopez' },
       body: { diagnosis: 'dato clínico sensible' },
     } as Partial<Request>;
     const response = {};
@@ -68,7 +68,7 @@ describe('AuditExceptionFilter', () => {
     filter.catch(exception, httpHost(request, response));
     await Promise.resolve();
 
-    expect(requestContext.setActor).toHaveBeenCalledWith(ACTOR_ID);
+    expect(requestContext.setActor).toHaveBeenCalledWith(ACTOR_ID, 'mlopez');
     expect(auditService.recordHttp).toHaveBeenCalledWith(request, AuditOutcome.DENIED, 403);
     expect(auditService.recordHttp.mock.calls[0]).toHaveLength(3);
     expect(auditService.recordHttp.mock.calls[0]).not.toContain(exception);

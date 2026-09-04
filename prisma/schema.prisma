@@ -191,7 +191,8 @@ model RefreshToken {
   @@map("refresh_tokens")
 }
 
-// Registro técnico append-only. No contiene cuerpos, consultas, nombres,
+// Registro técnico append-only. Conserva solo el username institucional del
+// actor como snapshot; no contiene cuerpos, consultas, nombres completos,
 // documentos, correos, contraseñas ni mensajes de error.
 model AuditEvent {
   id            String       @id @default(uuid()) @db.Uuid
@@ -199,6 +200,7 @@ model AuditEvent {
   action        String       @db.VarChar(64)
   outcome       AuditOutcome
   actorId       String?      @map("actor_id") @db.Uuid
+  actorUsernameAtEvent String? @map("actor_username_at_event") @db.VarChar(50)
   patientId     String?      @map("patient_id") @db.Uuid
   resourceType  String?      @map("resource_type") @db.VarChar(32)
   resourceId    String?      @map("resource_id") @db.Uuid
@@ -214,6 +216,7 @@ model AuditEvent {
 
   @@index([occurredAt(sort: Desc), id(sort: Desc)])
   @@index([actorId, occurredAt(sort: Desc)])
+  @@index([actorUsernameAtEvent, occurredAt(sort: Desc)])
   @@index([patientId, occurredAt(sort: Desc)])
   @@index([action, outcome, occurredAt(sort: Desc)])
   @@index([requestId])

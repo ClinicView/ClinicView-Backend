@@ -41,6 +41,7 @@ export class RequestContextMiddleware {
         route: 'UNRESOLVED',
         auditPolicy: null,
         actorId: null,
+        actorUsernameAtEvent: null,
         skipAudit: false,
       },
       next,

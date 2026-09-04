@@ -13,6 +13,7 @@ import { REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH } from '../refresh-cookie';
 const jwtPayload: JwtPayload = {
   sub: 'f9b3308d-cc74-4f30-823a-75ca624ff69f',
   email: 'medico@hospital.org',
+  username: 'medico',
   permissions: ['patients.read'],
   sessionVersion: 2,
   tokenType: 'access',
@@ -20,6 +21,7 @@ const jwtPayload: JwtPayload = {
 
 const session: AuthSessionResult = {
   actorId: jwtPayload.sub,
+  actorUsernameAtEvent: jwtPayload.username,
   response: { access_token: 'access-token', token_type: 'Bearer', expires_in: 900 },
   refreshToken: 'refresh-token',
   rememberMe: false,
@@ -54,7 +56,10 @@ describe('AuthController', () => {
     authService = {
       login: jest.fn().mockResolvedValue(session),
       refresh: jest.fn().mockResolvedValue(session),
-      logout: jest.fn().mockResolvedValue(jwtPayload.sub),
+      logout: jest.fn().mockResolvedValue({
+        actorId: jwtPayload.sub,
+        actorUsernameAtEvent: jwtPayload.username,
+      }),
     };
     usersService = { findOne: jest.fn().mockResolvedValue(userResponse) };
     requestContext = { setActor: jest.fn() };
@@ -110,7 +115,7 @@ describe('AuthController', () => {
     );
     expect((response.cookie as jest.Mock).mock.calls[0][2]).not.toHaveProperty('maxAge');
     expect(response.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
-    expect(requestContext.setActor).toHaveBeenCalledWith(jwtPayload.sub);
+    expect(requestContext.setActor).toHaveBeenCalledWith(jwtPayload.sub, jwtPayload.username);
   });
 
   it('refresh toma exclusivamente la cookie y la rota', async () => {
@@ -121,7 +126,7 @@ describe('AuthController', () => {
 
     expect(authService.refresh).toHaveBeenCalledWith('old-refresh');
     expect(result).toEqual(session.response);
-    expect(requestContext.setActor).toHaveBeenCalledWith(jwtPayload.sub);
+    expect(requestContext.setActor).toHaveBeenCalledWith(jwtPayload.sub, jwtPayload.username);
     expect(response.cookie).toHaveBeenCalledWith(
       REFRESH_COOKIE_NAME,
       session.refreshToken,
@@ -185,7 +190,7 @@ describe('AuthController', () => {
       response as Response,
     );
     expect(authService.logout).toHaveBeenCalledWith('active-refresh');
-    expect(requestContext.setActor).toHaveBeenCalledWith(jwtPayload.sub);
+    expect(requestContext.setActor).toHaveBeenCalledWith(jwtPayload.sub, jwtPayload.username);
     expect(response.clearCookie).toHaveBeenCalled();
   });
 
@@ -194,7 +199,7 @@ describe('AuthController', () => {
     await controller.logout({ headers: {} } as Request, response as Response);
     expect(authService.logout).toHaveBeenCalledWith(null);
     expect(response.clearCookie).toHaveBeenCalled();
-    expect(requestContext.setActor).toHaveBeenCalledWith(null);
+    expect(requestContext.setActor).toHaveBeenCalledWith(null, null);
   });
 
   it('me devuelve la ficha del usuario autenticado', async () => {

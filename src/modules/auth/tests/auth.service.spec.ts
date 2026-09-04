@@ -35,6 +35,7 @@ const mockUser: UserWithPermissionKeys = {
 const jwtPayload: JwtPayload = {
   sub: mockUser.user.id,
   email: mockUser.user.email,
+  username: mockUser.user.username,
   permissions: mockUser.permissionKeys,
   sessionVersion: mockUser.user.sessionVersion,
   tokenType: 'access',
@@ -97,7 +98,10 @@ describe('AuthService', () => {
             createSession: jest.fn().mockResolvedValue(true),
             findActiveByHash: jest.fn(),
             rotate: jest.fn().mockResolvedValue(true),
-            deleteByHash: jest.fn().mockResolvedValue(mockUser.user.id),
+            deleteByHash: jest.fn().mockResolvedValue({
+              userId: mockUser.user.id,
+              username: mockUser.user.username,
+            }),
           },
         },
       ],
@@ -152,6 +156,7 @@ describe('AuthService', () => {
       });
       expect(result.response).not.toHaveProperty('refresh_token');
       expect(result.actorId).toBe(jwtPayload.sub);
+      expect(result.actorUsernameAtEvent).toBe(jwtPayload.username);
       expect(result.rememberMe).toBe(false);
       expect(refreshTokensRepo.createSession).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -199,6 +204,7 @@ describe('AuthService', () => {
       expect(result.response).not.toHaveProperty('permissions');
       expect(result.response.access_token).toBe('access-token');
       expect(result.actorId).toBe(mockUser.user.id);
+      expect(result.actorUsernameAtEvent).toBe(mockUser.user.username);
       expect(result.refreshToken).toBe('refresh-token');
       expect(result.refreshExpiresAt).toBe(expiresAt);
       expect(refreshTokensRepo.rotate).toHaveBeenCalledWith(
@@ -277,7 +283,10 @@ describe('AuthService', () => {
 
   describe('logout', () => {
     it('elimina por hash sin persistir ni comparar el token en claro', async () => {
-      await expect(service.logout('some-refresh-token')).resolves.toBe(mockUser.user.id);
+      await expect(service.logout('some-refresh-token')).resolves.toEqual({
+        actorId: mockUser.user.id,
+        actorUsernameAtEvent: mockUser.user.username,
+      });
       const deletedHash = refreshTokensRepo.deleteByHash.mock.calls[0][0];
       expect(deletedHash).not.toBe('some-refresh-token');
       expect(deletedHash).toMatch(/^[0-9a-f]{64}$/);

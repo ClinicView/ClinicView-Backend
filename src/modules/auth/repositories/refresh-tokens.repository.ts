@@ -18,12 +18,17 @@ export interface RefreshTokenWrite {
   expiresAt: Date;
 }
 
+export interface RefreshTokenActor {
+  userId: string;
+  username: string;
+}
+
 function isSerializationConflict(error: unknown): boolean {
   return Boolean(
     error &&
-      typeof error === 'object' &&
-      'code' in error &&
-      (error as { code?: unknown }).code === 'P2034',
+    typeof error === 'object' &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'P2034',
   );
 }
 
@@ -71,11 +76,7 @@ export class RefreshTokensRepository {
     });
   }
 
-  async rotate(
-    oldTokenHash: string,
-    next: RefreshTokenWrite,
-    now: Date,
-  ): Promise<boolean> {
+  async rotate(oldTokenHash: string, next: RefreshTokenWrite, now: Date): Promise<boolean> {
     try {
       return await this.prisma.$transaction(
         async (tx) => {
@@ -106,17 +107,22 @@ export class RefreshTokensRepository {
     }
   }
 
-  async deleteByHash(tokenHash: string): Promise<string | null> {
+  async deleteByHash(tokenHash: string): Promise<RefreshTokenActor | null> {
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.refreshToken.findUnique({
         where: { tokenHash },
-        select: { userId: true },
+        select: {
+          userId: true,
+          user: { select: { username: true } },
+        },
       });
       if (!existing) return null;
       const deleted = await tx.refreshToken.deleteMany({
         where: { tokenHash, userId: existing.userId },
       });
-      return deleted.count === 1 ? existing.userId : null;
+      return deleted.count === 1
+        ? { userId: existing.userId, username: existing.user.username }
+        : null;
     });
   }
 }

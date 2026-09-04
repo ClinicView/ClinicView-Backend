@@ -32,6 +32,7 @@ function auditContext(policy: AuditPolicy): RequestContextState {
     route: '/patients/:patientId/records/:recordId',
     auditPolicy: policy,
     actorId: CONTEXT_ACTOR_ID,
+    actorUsernameAtEvent: 'context.actor',
     skipAudit: false,
   };
 }
@@ -61,7 +62,7 @@ function protectedRequest(
   },
 ): Request {
   const request: Record<string, unknown> = {
-    user: { sub: userSub },
+    user: { sub: userSub, username: 'mlopez' },
     params,
   };
   for (const property of ['body', 'query', 'error', 'originalUrl', 'url', 'headers']) {
@@ -112,6 +113,7 @@ describe('AuditService.recordHttp', () => {
         action: 'CLINICAL_RECORD_VIEWED',
         outcome,
         actorId: ACTOR_ID,
+        actorUsernameAtEvent: 'mlopez',
         patientId: PATIENT_ID,
         resourceType: 'CLINICAL_RECORD',
         resourceId: RESOURCE_ID,
@@ -179,6 +181,7 @@ describe('AuditService.recordHttp', () => {
     expect(repository.create).toHaveBeenCalledWith(
       expect.objectContaining({
         actorId: null,
+        actorUsernameAtEvent: null,
         patientId: null,
         resourceId: null,
       }),
@@ -195,8 +198,27 @@ describe('AuditService.recordHttp', () => {
     await service.recordHttp(protectedRequest(null, {}), AuditOutcome.SUCCESS, 200);
 
     expect(repository.create).toHaveBeenCalledWith(
-      expect.objectContaining({ actorId: CONTEXT_ACTOR_ID }),
+      expect.objectContaining({
+        actorId: CONTEXT_ACTOR_ID,
+        actorUsernameAtEvent: 'context.actor',
+      }),
     );
+  });
+
+  it('descarta usernames que puedan contener correo u otro texto no permitido', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(1_800_000_000_001);
+    const { context, repository, service } = createHarness({ action: 'PATIENT_VIEWED' });
+    context.actorUsernameAtEvent = 'admin@hospital.org';
+    const request = protectedRequest(ACTOR_ID, {});
+    (request as Request & { user: { sub: string; username: string } }).user.username =
+      'admin@hospital.org';
+
+    await service.recordHttp(request, AuditOutcome.SUCCESS, 200);
+
+    expect(repository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: ACTOR_ID, actorUsernameAtEvent: null }),
+    );
+    expect(JSON.stringify(repository.create.mock.calls[0][0])).not.toContain('@hospital.org');
   });
 
   it('no escribe cuando falta contexto, política o se marcó SkipAudit', async () => {
@@ -252,6 +274,7 @@ describe('AuditService.findMany', () => {
       action: 'PATIENT_VIEWED',
       outcome: AuditOutcome.SUCCESS,
       actorId: ACTOR_ID,
+      actorUsername: 'mlopez',
       patientId: PATIENT_ID,
       resourceType: 'PATIENT',
       resourceId: RESOURCE_ID,

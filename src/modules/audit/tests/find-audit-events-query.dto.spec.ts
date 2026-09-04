@@ -17,6 +17,7 @@ describe('FindAuditEventsQueryDto', () => {
       action: 'CLINICAL_RECORD_VIEWED',
       outcome: AuditOutcome.DENIED,
       actorId: UUID,
+      actorUsername: 'mlopez',
       patientId: UUID,
       resourceType: 'CLINICAL_RECORD',
       resourceId: UUID,
@@ -32,6 +33,7 @@ describe('FindAuditEventsQueryDto', () => {
   it.each([
     ['cursor', 'patient@example.org'],
     ['actorId', '../../admin'],
+    ['actorUsername', 'admin@hospital.org'],
     ['patientId', '87654321'],
     ['resourceId', '<script>'],
     ['requestId', 'request-123'],

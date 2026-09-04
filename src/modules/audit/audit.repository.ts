@@ -8,6 +8,7 @@ export interface FindAuditEventsInput {
   action?: string;
   outcome?: AuditOutcome;
   actorId?: string;
+  actorUsername?: string;
   patientId?: string;
   resourceType?: string;
   resourceId?: string;
@@ -15,6 +16,14 @@ export interface FindAuditEventsInput {
   from?: Date;
   to?: Date;
 }
+
+export type AuditEventWithActor = AuditEvent & {
+  actor: {
+    username: string;
+    fullName: string;
+    isActive: boolean;
+  } | null;
+};
 
 @Injectable()
 export class AuditRepository {
@@ -29,13 +38,19 @@ export class AuditRepository {
   }
 
   async findMany(input: FindAuditEventsInput): Promise<{
-    data: AuditEvent[];
+    data: AuditEventWithActor[];
     nextCursor: string | null;
   }> {
     const where: Prisma.AuditEventWhereInput = {
       ...(input.action && { action: input.action }),
       ...(input.outcome && { outcome: input.outcome }),
       ...(input.actorId && { actorId: input.actorId }),
+      ...(input.actorUsername && {
+        OR: [
+          { actorUsernameAtEvent: input.actorUsername },
+          { actor: { is: { username: input.actorUsername } } },
+        ],
+      }),
       ...(input.patientId && { patientId: input.patientId }),
       ...(input.resourceType && { resourceType: input.resourceType }),
       ...(input.resourceId && { resourceId: input.resourceId }),
@@ -51,6 +66,15 @@ export class AuditRepository {
     };
     const rows = await this.prisma.auditEvent.findMany({
       where,
+      include: {
+        actor: {
+          select: {
+            username: true,
+            fullName: true,
+            isActive: true,
+          },
+        },
+      },
       orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
       take: input.limit + 1,
       ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),

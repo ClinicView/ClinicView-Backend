@@ -9,7 +9,9 @@ import { FindAuditEventsQueryDto } from './dto/find-audit-events-query.dto';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-type AuditedRequest = Request & { user?: { sub?: unknown } };
+const USERNAME_PATTERN = /^[a-zA-Z0-9._-]{3,50}$/;
+
+type AuditedRequest = Request & { user?: { sub?: unknown; username?: unknown } };
 
 @Injectable()
 export class AuditService {
@@ -31,7 +33,16 @@ export class AuditService {
     const policy = context.auditPolicy;
     const resourceType = policy.resourceType ?? this.inferResourceType(context.route);
     const actorFromRequest = this.validUuid(request.user?.sub);
-    const actorId = actorFromRequest ?? this.validUuid(context.actorId);
+    const actorFromContext = this.validUuid(context.actorId);
+    const actorId = actorFromRequest ?? actorFromContext;
+    const actorUsernameAtEvent = actorFromRequest
+      ? (this.validUsername(request.user?.username) ??
+        (actorFromRequest === actorFromContext
+          ? this.validUsername(context.actorUsernameAtEvent)
+          : null))
+      : actorFromContext
+        ? this.validUsername(context.actorUsernameAtEvent)
+        : null;
     const resourceId =
       this.resolveResourceId(request, policy, responseBody) ??
       (resourceType === 'USER' ? actorId : null);
@@ -44,6 +55,7 @@ export class AuditService {
         action: policy.action.slice(0, 64),
         outcome,
         actorId,
+        actorUsernameAtEvent,
         patientId,
         resourceType,
         resourceId,
@@ -130,6 +142,10 @@ export class AuditService {
 
   private validUuid(value: unknown): string | null {
     return typeof value === 'string' && UUID_PATTERN.test(value) ? value : null;
+  }
+
+  private validUsername(value: unknown): string | null {
+    return typeof value === 'string' && USERNAME_PATTERN.test(value) ? value : null;
   }
 
   private isObject(value: unknown): value is Record<string, unknown> {

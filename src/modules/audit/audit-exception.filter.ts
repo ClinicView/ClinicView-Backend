@@ -24,9 +24,15 @@ export class AuditExceptionFilter extends BaseExceptionFilter {
   }
 
   private async recordThenReply(exception: unknown, host: ArgumentsHost): Promise<void> {
-    const request = host.switchToHttp().getRequest<Request & { user?: { sub?: unknown } }>();
+    const request = host
+      .switchToHttp()
+      .getRequest<Request & { user?: { sub?: unknown; username?: unknown } }>();
     const actorId = request.user?.sub;
-    this.requestContext.setActor(typeof actorId === 'string' ? actorId : null);
+    const actorUsername = request.user?.username;
+    this.requestContext.setActor(
+      typeof actorId === 'string' ? actorId : null,
+      typeof actorUsername === 'string' ? actorUsername : null,
+    );
     const status = exception instanceof HttpException ? exception.getStatus() : 500;
     const outcome = status === 401 || status === 403 ? AuditOutcome.DENIED : AuditOutcome.FAILED;
     await this.auditService.recordHttp(request, outcome, status);

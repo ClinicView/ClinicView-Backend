@@ -26,6 +26,7 @@ const ROLE_KEYS = {
 export interface E2eIdentity {
   id: string;
   email: string;
+  username: string;
   password: string;
 }
 
@@ -85,7 +86,7 @@ export async function createAuthRbacFixture(prisma: PrismaClient): Promise<AuthR
         userRoles: { create: { roleId } },
       },
     });
-    return { id: user.id, email, password };
+    return { id: user.id, email, username: user.username, password };
   }
 
   return {

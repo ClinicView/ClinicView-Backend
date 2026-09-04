@@ -88,7 +88,7 @@ export class AuthController {
     const previousRefreshToken = readRefreshCookie({ headers: req.headers ?? {} });
     if (previousRefreshToken) await this.authService.logout(previousRefreshToken);
     const session = await this.authService.login(req.user, dto.rememberMe ?? false);
-    this.requestContext.setActor(session.actorId);
+    this.requestContext.setActor(session.actorId, session.actorUsernameAtEvent);
     this.writeSessionCookie(response, session);
     return session.response;
   }
@@ -118,7 +118,7 @@ export class AuthController {
 
     try {
       const session = await this.authService.refresh(refreshToken);
-      this.requestContext.setActor(session.actorId);
+      this.requestContext.setActor(session.actorId, session.actorUsernameAtEvent);
       this.writeSessionCookie(response, session);
       return session.response;
     } catch (error) {
@@ -139,8 +139,8 @@ export class AuthController {
   ): Promise<void> {
     this.assertTrustedBrowserOrigin(request);
     try {
-      const actorId = await this.authService.logout(readRefreshCookie(request));
-      this.requestContext.setActor(actorId);
+      const actor = await this.authService.logout(readRefreshCookie(request));
+      this.requestContext.setActor(actor?.actorId ?? null, actor?.actorUsernameAtEvent ?? null);
     } finally {
       this.clearSessionCookie(response);
     }

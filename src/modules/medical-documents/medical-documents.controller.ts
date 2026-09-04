@@ -145,6 +145,15 @@ export class MedicalDocumentsController {
   @ApiOperation({ summary: 'Descargar / visualizar el archivo del documento' })
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    schema: { type: 'string', format: 'binary' },
+    headers: {
+      'Cache-Control': { schema: { type: 'string', example: 'private, no-store, max-age=0' } },
+      Pragma: { schema: { type: 'string', example: 'no-cache' } },
+      'X-Content-Type-Options': { schema: { type: 'string', example: 'nosniff' } },
+    },
+  })
   async downloadFile(
     @Param('patientId', ParseUUIDPipe) patientId: string,
     @Param('id', ParseUUIDPipe) id: string,
@@ -154,6 +163,10 @@ export class MedicalDocumentsController {
     res.set({
       'Content-Type': document.mimeType,
       'Content-Disposition': `inline; filename="${encodeURIComponent(document.originalName)}"`,
+      'Cache-Control': 'private, no-store, max-age=0',
+      Pragma: 'no-cache',
+      Expires: '0',
+      'X-Content-Type-Options': 'nosniff',
     });
     return new StreamableFile(stream);
   }

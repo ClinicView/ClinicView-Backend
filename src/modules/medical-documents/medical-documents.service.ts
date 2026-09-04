@@ -8,6 +8,7 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  UnsupportedMediaTypeException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { DocumentStatus, MedicalDocument, Prisma } from '@prisma/client';
@@ -35,6 +36,31 @@ const ALLOWED_UPLOADS = new Map<string, Set<string>>([
   ['image/jpeg', new Set(['.jpg', '.jpeg'])],
   ['image/png', new Set(['.png'])],
 ]);
+const PDF_SIGNATURE = Buffer.from('%PDF-', 'ascii');
+const JPEG_SIGNATURE = Buffer.from([0xff, 0xd8, 0xff]);
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function detectUploadMime(buffer: Buffer): string | null {
+  if (
+    buffer.length >= PNG_SIGNATURE.length &&
+    buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)
+  ) {
+    return 'image/png';
+  }
+  if (
+    buffer.length >= JPEG_SIGNATURE.length &&
+    buffer.subarray(0, JPEG_SIGNATURE.length).equals(JPEG_SIGNATURE)
+  ) {
+    return 'image/jpeg';
+  }
+  if (
+    buffer.length >= PDF_SIGNATURE.length &&
+    buffer.subarray(0, PDF_SIGNATURE.length).equals(PDF_SIGNATURE)
+  ) {
+    return 'application/pdf';
+  }
+  return null;
+}
 
 function getUploadMaxSizeBytes(): number {
   const configured = Number.parseInt(
@@ -152,24 +178,33 @@ export class MedicalDocumentsService implements OnModuleInit {
     }
 
     const ext = extname(file.originalname).toLowerCase();
-    const allowedExtensions = ALLOWED_UPLOADS.get(file.mimetype);
-    if (!allowedExtensions?.has(ext)) {
-      throw new ConflictException(
-        'Tipo de archivo no permitido. Permitidos: PDF, JPEG y PNG con extensión válida.',
+    const detectedMime = detectUploadMime(file.buffer);
+    const allowedExtensions = detectedMime ? ALLOWED_UPLOADS.get(detectedMime) : undefined;
+    if (!detectedMime || detectedMime !== file.mimetype || !allowedExtensions?.has(ext)) {
+      throw new UnsupportedMediaTypeException(
+        'Archivo no permitido. Adjunta un PDF, JPEG o PNG válido.',
       );
     }
 
     const filename = `${randomUUID()}${ext}`;
-    const storagePath = await this.storage.save(file.buffer, filename, patientId);
-
-    const doc = await this.repo.create({
-      patientId,
-      originalName: file.originalname,
-      storagePath,
-      mimeType: file.mimetype,
-      sizeBytes: file.size,
-      ...(userId && { createdBy: userId }),
-    });
+    let storagePath = `${patientId}/${filename}`;
+    let doc: MedicalDocumentWithAssignee;
+    try {
+      storagePath = await this.storage.save(file.buffer, filename, patientId);
+      doc = await this.repo.create({
+        patientId,
+        originalName: file.originalname,
+        storagePath,
+        mimeType: detectedMime,
+        sizeBytes: file.size,
+        ...(userId && { createdBy: userId }),
+      });
+    } catch (error) {
+      await this.storage.delete(storagePath).catch(() => {
+        this.logger.error('No se pudo retirar un archivo huérfano tras fallar su metadata.');
+      });
+      throw error;
+    }
 
     return this.toResponse(doc);
   }

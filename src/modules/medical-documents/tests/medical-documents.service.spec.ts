@@ -1,4 +1,9 @@
-import { ConflictException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  ConflictException,
+  NotFoundException,
+  UnauthorizedException,
+  UnsupportedMediaTypeException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentStatus, ReviewPriority } from '@prisma/client';
 import { IaClientService } from '../../../core/ia/ia-client.service';
@@ -50,8 +55,8 @@ const mockFile: Express.Multer.File = {
   originalname: 'informe.pdf',
   encoding: '7bit',
   mimetype: 'application/pdf',
-  buffer: Buffer.from('PDF content'),
-  size: 102400,
+  buffer: Buffer.from('%PDF-1.4\ncontenido sintético\n%%EOF\n'),
+  size: Buffer.byteLength('%PDF-1.4\ncontenido sintético\n%%EOF\n'),
   stream: null as never,
   destination: '',
   filename: '',
@@ -138,9 +143,42 @@ describe('MedicalDocumentsService', () => {
     it('rechaza MIME types no permitidos', async () => {
       const badFile = { ...mockFile, mimetype: 'text/plain' };
       await expect(service.upload('patient-uuid', badFile, 'user-uuid')).rejects.toThrow(
-        ConflictException,
+        UnsupportedMediaTypeException,
       );
       expect(mockStorage.save).not.toHaveBeenCalled();
+    });
+
+    it('rechaza un archivo disfrazado aunque extensión y MIME declarado coincidan', async () => {
+      const disguised = { ...mockFile, buffer: Buffer.from('no es un PDF real') };
+
+      await expect(service.upload('patient-uuid', disguised, 'user-uuid')).rejects.toThrow(
+        UnsupportedMediaTypeException,
+      );
+
+      expect(mockStorage.save).not.toHaveBeenCalled();
+      expect(mockRepo.create).not.toHaveBeenCalled();
+    });
+
+    it('elimina el binario si falla la creación de metadata', async () => {
+      mockStorage.save.mockResolvedValue('patient-uuid/archivo-aleatorio.pdf');
+      mockStorage.delete.mockResolvedValue(undefined);
+      mockRepo.create.mockRejectedValue(new Error('metadata unavailable'));
+
+      await expect(service.upload('patient-uuid', mockFile, 'user-uuid')).rejects.toThrow(
+        'metadata unavailable',
+      );
+
+      expect(mockStorage.delete).toHaveBeenCalledWith('patient-uuid/archivo-aleatorio.pdf');
+    });
+
+    it('conserva el error original aunque falle la compensación de storage', async () => {
+      mockStorage.save.mockResolvedValue('patient-uuid/archivo-aleatorio.pdf');
+      mockStorage.delete.mockRejectedValue(new Error('cleanup unavailable'));
+      mockRepo.create.mockRejectedValue(new Error('metadata unavailable'));
+
+      await expect(service.upload('patient-uuid', mockFile, 'user-uuid')).rejects.toThrow(
+        'metadata unavailable',
+      );
     });
   });
 

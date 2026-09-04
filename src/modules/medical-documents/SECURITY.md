@@ -17,4 +17,4 @@ Archivos clínicos (PHI) e imágenes de historias. Alto riesgo.
 - Nunca loguear contenido del archivo ni datos del paciente; solo `documentId` opaco.
 
 ## Checklist
-- [ ] MIME real validado. [ ] Tamaño limitado. [ ] URLs firmadas. [ ] Cifrado. [ ] Accesos auditados.
+- [x] MIME real validado. [x] Tamaño limitado. [ ] URLs firmadas. [ ] Cifrado. [x] Accesos auditados.

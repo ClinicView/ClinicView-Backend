@@ -1,5 +1,7 @@
+import { Readable } from 'node:stream';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentStatus } from '@prisma/client';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../../core/rbac/permissions.guard';
 import { MedicalDocumentsController } from '../medical-documents.controller';
@@ -100,6 +102,27 @@ describe('MedicalDocumentsController', () => {
     const result = await controller.findOne('patient-uuid', 'doc-uuid');
     expect(mockService.findOne).toHaveBeenCalledWith('patient-uuid', 'doc-uuid');
     expect(result).toBe(response);
+  });
+
+  it('protege la descarga clínica contra cache y sniffing', async () => {
+    const stream = Readable.from(Buffer.from('%PDF-1.4\n%%EOF'));
+    mockService.getFile.mockResolvedValue({
+      document: makeResponse({ originalName: 'informe clínico.pdf' }),
+      stream,
+    });
+    const response = { set: jest.fn() } as unknown as Response;
+
+    await controller.downloadFile('patient-uuid', 'doc-uuid', response);
+
+    expect(response.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'Content-Type': 'application/pdf',
+        'Cache-Control': 'private, no-store, max-age=0',
+        Pragma: 'no-cache',
+        Expires: '0',
+        'X-Content-Type-Options': 'nosniff',
+      }),
+    );
   });
 
   it('process delega en el servicio', async () => {

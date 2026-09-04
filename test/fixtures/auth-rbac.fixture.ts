@@ -41,8 +41,10 @@ export async function createAuthRbacFixture(prisma: PrismaClient): Promise<AuthR
   const permissionKeys = Object.values(PERMISSIONS);
   const permissions = await Promise.all(
     permissionKeys.map((key) =>
-      prisma.permission.create({
-        data: { key, description: `Permiso sintético E2E: ${key}` },
+      prisma.permission.upsert({
+        where: { key },
+        update: {},
+        create: { key, description: `Permiso sintético E2E: ${key}` },
       }),
     ),
   );

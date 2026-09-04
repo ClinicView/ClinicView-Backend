@@ -25,6 +25,19 @@ Pruebas **end-to-end** del backend (NestJS e2e). Las pruebas unit/integration vi
 - Registro manual â†’ validaciÃ³n â†’ aparece en historial.
 - Carga de archivos: validaciÃ³n de tipo/tamaÃ±o/MIME.
 
+## Cobertura clínica integral
+
+`clinical-integrity.e2e-spec.ts` ejecuta contra la aplicación HTTP real y PostgreSQL aislado:
+
+- alta de paciente y borradores privados con CAS, consumo atómico y TTL;
+- los siete tipos de registro y validación discriminada de `details`;
+- media clínica temporal, contenido privado, eliminación CAS y asociación transaccional;
+- correcciones/anulaciones con conflictos de versión;
+- PDF/JPEG/PNG por firma real, procesamiento con `IaClientService` mockeado y carrera
+  `validate` vs. `reject`;
+- exportación completa de más de 50 registros, todos los estados y adjuntos;
+- autorización 401/403, rollback y ausencia de sentinelas PHI en auditoría.
+
 ## Reglas
 - Mockear `core/ia` y `integrations/rpa` en e2e (no llamar servicios reales).
 - Datos sintÃ©ticos. Base de datos efÃ­mera por corrida.

@@ -24,7 +24,10 @@ import {
   ValidateDocumentDto,
   ValidationChecklistSnapshotDto,
 } from './dto/validate-document.dto';
-import { MedicalDocumentsRepository } from './repositories/medical-documents.repository';
+import {
+  MedicalDocumentsRepository,
+  type MedicalDocumentWithAssignee,
+} from './repositories/medical-documents.repository';
 
 const DEFAULT_UPLOAD_MAX_SIZE_MB = 20;
 const ALLOWED_UPLOADS = new Map<string, Set<string>>([
@@ -292,6 +295,7 @@ export class MedicalDocumentsService implements OnModuleInit {
         `Solo se puede validar un documento con estado PROCESSED. Estado actual: ${doc.status}.`,
       );
     }
+    this.ensureAssignedToActor(doc, userId);
 
     const correctedText = dto.correctedText?.trim();
     if (!correctedText) {
@@ -322,6 +326,7 @@ export class MedicalDocumentsService implements OnModuleInit {
       id,
       patientId,
       dto.expectedVersion,
+      userId,
       {
         correctedText,
         correctedEntities: normalizedEntities as unknown as Prisma.InputJsonValue,
@@ -359,6 +364,7 @@ export class MedicalDocumentsService implements OnModuleInit {
         `Solo se puede corregir un documento con estado PROCESSED. Estado actual: ${doc.status}.`,
       );
     }
+    this.ensureAssignedToActor(doc, userId);
 
     const hasCorrectedText = dto.correctedText !== undefined;
     const hasCorrectedEntities = dto.correctedEntities !== undefined;
@@ -366,7 +372,7 @@ export class MedicalDocumentsService implements OnModuleInit {
       throw new BadRequestException('Debe enviar texto corregido o entidades corregidas.');
     }
 
-    const updated = await this.repo.saveCorrection(id, patientId, dto.expectedVersion, {
+    const updated = await this.repo.saveCorrection(id, patientId, dto.expectedVersion, userId, {
       ...(hasCorrectedText && { correctedText: dto.correctedText?.trim() ?? null }),
       ...(hasCorrectedEntities && {
         correctedEntities: normalizeCorrectedEntities(dto.correctedEntities) as unknown as Prisma.InputJsonValue,
@@ -402,6 +408,9 @@ export class MedicalDocumentsService implements OnModuleInit {
         `No se puede rechazar un documento con estado ${doc.status}.`,
       );
     }
+    if (doc.status === DocumentStatus.PROCESSED) {
+      this.ensureAssignedToActor(doc, userId);
+    }
     const rejectReason = dto.reason.trim();
     if (rejectReason.length < 10) {
       throw new BadRequestException('El motivo del rechazo debe tener al menos 10 caracteres.');
@@ -410,6 +419,7 @@ export class MedicalDocumentsService implements OnModuleInit {
       id,
       patientId,
       dto.expectedVersion,
+      userId,
       {
         rejectReason,
         reviewedAt: new Date(),
@@ -453,7 +463,7 @@ export class MedicalDocumentsService implements OnModuleInit {
     };
   }
 
-  private toResponse(doc: MedicalDocument): DocumentResponseDto {
+  private toResponse(doc: MedicalDocumentWithAssignee): DocumentResponseDto {
     return {
       id: doc.id,
       patientId: doc.patientId,
@@ -480,8 +490,23 @@ export class MedicalDocumentsService implements OnModuleInit {
         doc.validationChecklist as unknown as ValidationChecklistSnapshotDto | null,
       validationAttested: doc.validationAttested,
       validationAttestedAt: doc.validationAttestedAt,
+      reviewPriority: doc.reviewPriority,
+      assignedReviewerId: doc.assignedReviewerId,
+      assignedAt: doc.assignedAt,
+      assignedReviewer: doc.assignedReviewer,
       updatedAt: doc.updatedAt,
       version: doc.version,
     };
+  }
+
+  private ensureAssignedToActor(doc: MedicalDocument, actorId: string): void {
+    if (!doc.assignedReviewerId) {
+      throw new ConflictException(
+        'El documento debe ser tomado o asignado antes de editar su revisión.',
+      );
+    }
+    if (doc.assignedReviewerId !== actorId) {
+      throw new ConflictException('El documento está asignado a otro revisor.');
+    }
   }
 }

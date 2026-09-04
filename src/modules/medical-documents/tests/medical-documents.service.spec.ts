@@ -1,6 +1,6 @@
 import { ConflictException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { DocumentStatus } from '@prisma/client';
+import { DocumentStatus, ReviewPriority } from '@prisma/client';
 import { IaClientService } from '../../../core/ia/ia-client.service';
 import { StorageService } from '../../../core/storage/storage.service';
 import { NotificationsService } from '../../notifications/notifications.service';
@@ -28,6 +28,15 @@ const makeDoc = (overrides: Record<string, unknown> = {}) => ({
   validationChecklist: null,
   validationAttested: false,
   validationAttestedAt: null,
+  reviewPriority: ReviewPriority.NORMAL,
+  assignedReviewerId: 'user-uuid',
+  assignedAt: new Date(),
+  assignedReviewer: {
+    id: 'user-uuid',
+    username: 'reviewer',
+    fullName: 'Revisor Clinico',
+    profession: null,
+  },
   createdAt: new Date(),
   createdBy: 'user-uuid',
   updatedAt: new Date(),
@@ -264,6 +273,7 @@ describe('MedicalDocumentsService', () => {
         'doc-uuid',
         'patient-uuid',
         0,
+        'user-uuid',
         expect.objectContaining({
           correctedText: 'texto final revisado',
           correctedEntities: [
@@ -292,6 +302,17 @@ describe('MedicalDocumentsService', () => {
       await expect(
         service.validate('patient-uuid', 'doc-uuid', validationDto, 'user-uuid'),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('impide validar un documento sin responsable asignado', async () => {
+      mockRepo.findByIdAndPatient.mockResolvedValue(
+        makeDoc({ status: DocumentStatus.PROCESSED, assignedReviewerId: null }),
+      );
+
+      await expect(
+        service.validate('patient-uuid', 'doc-uuid', validationDto, 'user-uuid'),
+      ).rejects.toThrow('debe ser tomado o asignado');
+      expect(mockRepo.validateWithCorrection).not.toHaveBeenCalled();
     });
 
     it('responde 409 si otro revisor cambió la versión antes de confirmar', async () => {
@@ -329,6 +350,13 @@ describe('MedicalDocumentsService', () => {
           ],
           correctedAt: new Date('2026-09-01T10:00:00.000Z'),
           correctedById: 'original-corrector',
+          assignedReviewerId: 'validator-user',
+          assignedReviewer: {
+            id: 'validator-user',
+            username: 'validator',
+            fullName: 'Validador',
+            profession: null,
+          },
         }),
       );
       mockRepo.validateWithCorrection.mockResolvedValue(
@@ -342,7 +370,7 @@ describe('MedicalDocumentsService', () => {
         'validator-user',
       );
 
-      const validationData = mockRepo.validateWithCorrection.mock.calls[0][3];
+      const validationData = mockRepo.validateWithCorrection.mock.calls[0][4];
       expect(validationData).not.toHaveProperty('correctedAt');
       expect(validationData).not.toHaveProperty('correctedById');
       expect(validationData).toEqual(
@@ -393,6 +421,7 @@ describe('MedicalDocumentsService', () => {
         'doc-uuid',
         'patient-uuid',
         0,
+        'user-uuid',
         expect.objectContaining({
           correctedText: 'texto corregido',
           correctedById: 'user-uuid',
@@ -411,6 +440,22 @@ describe('MedicalDocumentsService', () => {
           correctedText: 'texto',
         }, 'user-uuid'),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('impide guardar cambios si el documento pertenece a otro revisor', async () => {
+      mockRepo.findByIdAndPatient.mockResolvedValue(
+        makeDoc({ status: DocumentStatus.PROCESSED, assignedReviewerId: 'other-user' }),
+      );
+
+      await expect(
+        service.saveCorrection(
+          'patient-uuid',
+          'doc-uuid',
+          { expectedVersion: 0, correctedText: 'texto' },
+          'user-uuid',
+        ),
+      ).rejects.toThrow('asignado a otro revisor');
+      expect(mockRepo.saveCorrection).not.toHaveBeenCalled();
     });
 
     it('responde 409 si intenta guardar sobre una versión desactualizada', async () => {
@@ -456,6 +501,7 @@ describe('MedicalDocumentsService', () => {
         'doc-uuid',
         'patient-uuid',
         0,
+        'user-uuid',
         expect.objectContaining({
           rejectReason: 'Documento ilegible por baja resolución.',
           reviewedBy: 'user-uuid',
@@ -476,6 +522,22 @@ describe('MedicalDocumentsService', () => {
           'user-uuid',
         ),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('impide rechazar un documento procesado asignado a otra persona', async () => {
+      mockRepo.findByIdAndPatient.mockResolvedValue(
+        makeDoc({ status: DocumentStatus.PROCESSED, assignedReviewerId: 'other-user' }),
+      );
+
+      await expect(
+        service.reject(
+          'patient-uuid',
+          'doc-uuid',
+          { expectedVersion: 0, reason: 'Documento ilegible por baja resolucion.' },
+          'user-uuid',
+        ),
+      ).rejects.toThrow('asignado a otro revisor');
+      expect(mockRepo.rejectReviewedVersion).not.toHaveBeenCalled();
     });
 
     it('responde 409 si la versión cambia antes de rechazar', async () => {

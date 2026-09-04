@@ -29,6 +29,7 @@ describe('MedicalDocumentsRepository', () => {
       'doc-uuid',
       'patient-uuid',
       4,
+      'reviewer-uuid',
       {
         correctedText: 'Texto final',
         correctedEntities: [],
@@ -48,6 +49,7 @@ describe('MedicalDocumentsRepository', () => {
         id: 'doc-uuid',
         patientId: 'patient-uuid',
         status: DocumentStatus.PROCESSED,
+        assignedReviewerId: 'reviewer-uuid',
         version: 4,
       },
       data: expect.objectContaining({
@@ -57,7 +59,7 @@ describe('MedicalDocumentsRepository', () => {
         version: { increment: 1 },
       }),
     });
-    expect(findUnique).toHaveBeenCalledWith({ where: { id: 'doc-uuid' } });
+    expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'doc-uuid' } }));
     expect(result).toBe(validated);
   });
 
@@ -68,6 +70,7 @@ describe('MedicalDocumentsRepository', () => {
       'doc-uuid',
       'patient-uuid',
       4,
+      'reviewer-uuid',
       {
         correctedText: 'Texto final',
         correctedEntities: [],
@@ -93,6 +96,7 @@ describe('MedicalDocumentsRepository', () => {
       'doc-uuid',
       'patient-uuid',
       4,
+      'reviewer-uuid',
       {
         rejectReason: 'Documento ilegible por baja resolución.',
         reviewedAt: new Date('2026-09-02T10:00:00.000Z'),
@@ -105,7 +109,10 @@ describe('MedicalDocumentsRepository', () => {
       where: {
         id: 'doc-uuid',
         patientId: 'patient-uuid',
-        status: { in: [DocumentStatus.PENDING, DocumentStatus.PROCESSED] },
+        OR: [
+          { status: DocumentStatus.PENDING },
+          { status: DocumentStatus.PROCESSED, assignedReviewerId: 'reviewer-uuid' },
+        ],
         version: 4,
       },
       data: expect.objectContaining({
@@ -124,6 +131,7 @@ describe('MedicalDocumentsRepository', () => {
       id: 'doc-uuid',
       patientId: 'patient-uuid',
       status: DocumentStatus.PROCESSED,
+      assignedReviewerId: 'reviewer-uuid',
       version: 4,
       validationChecklist: null,
       validationAttested: false,
@@ -132,13 +140,12 @@ describe('MedicalDocumentsRepository', () => {
 
     updateMany.mockImplementation(async ({ where, data }) => {
       await Promise.resolve();
-      const statusFilter = where.status as
-        | DocumentStatus
-        | { in: DocumentStatus[] };
-      const statusMatches =
-        typeof statusFilter === 'string'
-          ? row.status === statusFilter
-          : statusFilter.in.includes(row.status as DocumentStatus);
+      const statusMatches = where.status
+        ? row.status === where.status
+        : where.OR.some((branch: Record<string, unknown>) =>
+            row.status === branch.status &&
+            (!branch.assignedReviewerId || row.assignedReviewerId === branch.assignedReviewerId),
+          );
       if (
         row.id !== where.id ||
         row.patientId !== where.patientId ||
@@ -159,7 +166,7 @@ describe('MedicalDocumentsRepository', () => {
     findUnique.mockImplementation(async () => row as unknown as MedicalDocument);
 
     const [validationResult, rejectionResult] = await Promise.all([
-      repository.validateWithCorrection('doc-uuid', 'patient-uuid', 4, {
+      repository.validateWithCorrection('doc-uuid', 'patient-uuid', 4, 'reviewer-uuid', {
         correctedText: 'Texto final',
         correctedEntities: [],
         reviewedAt: new Date('2026-09-02T10:00:00.000Z'),
@@ -172,7 +179,7 @@ describe('MedicalDocumentsRepository', () => {
         validationAttestedAt: new Date('2026-09-02T10:00:00.000Z'),
         updatedBy: 'validator-uuid',
       }),
-      repository.rejectReviewedVersion('doc-uuid', 'patient-uuid', 4, {
+      repository.rejectReviewedVersion('doc-uuid', 'patient-uuid', 4, 'reviewer-uuid', {
         rejectReason: 'Documento ilegible por baja resolución.',
         reviewedAt: new Date('2026-09-02T10:00:00.000Z'),
         reviewedBy: 'rejector-uuid',

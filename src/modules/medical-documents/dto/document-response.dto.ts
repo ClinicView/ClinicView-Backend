@@ -1,6 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { DocumentStatus } from '@prisma/client';
+import { DocumentStatus, ReviewPriority } from '@prisma/client';
 import { ValidationChecklistSnapshotDto } from './validate-document.dto';
+
+export class DocumentReviewAssigneeDto {
+  @ApiProperty() id: string;
+  @ApiProperty() username: string;
+  @ApiProperty() fullName: string;
+  @ApiPropertyOptional({ type: String, nullable: true }) profession: string | null;
+}
 
 export class DocumentResponseDto {
   @ApiProperty() id: string;
@@ -81,6 +88,11 @@ export class DocumentResponseDto {
   validationChecklist: ValidationChecklistSnapshotDto | null;
   @ApiProperty() validationAttested: boolean;
   @ApiPropertyOptional({ type: String, nullable: true }) validationAttestedAt: Date | null;
+  @ApiProperty({ enum: ReviewPriority }) reviewPriority: ReviewPriority;
+  @ApiPropertyOptional({ type: String, nullable: true }) assignedReviewerId: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) assignedAt: Date | null;
+  @ApiPropertyOptional({ type: DocumentReviewAssigneeDto, nullable: true })
+  assignedReviewer: DocumentReviewAssigneeDto | null;
   @ApiProperty() updatedAt: Date;
   @ApiProperty({ minimum: 0 }) version: number;
 }

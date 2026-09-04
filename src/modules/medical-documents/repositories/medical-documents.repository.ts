@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { DocumentStatus, MedicalDocument, Prisma } from '@prisma/client';
+import { DocumentStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
 
 export interface FindDocumentsFilters {
@@ -52,18 +52,30 @@ export interface RejectDocumentData {
   updatedBy: string;
 }
 
+const medicalDocumentWithAssigneeArgs = {
+  include: {
+    assignedReviewer: {
+      select: { id: true, username: true, fullName: true, profession: true },
+    },
+  },
+} satisfies Prisma.MedicalDocumentDefaultArgs;
+
+export type MedicalDocumentWithAssignee = Prisma.MedicalDocumentGetPayload<
+  typeof medicalDocumentWithAssigneeArgs
+>;
+
 @Injectable()
 export class MedicalDocumentsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(data: Prisma.MedicalDocumentUncheckedCreateInput): Promise<MedicalDocument> {
-    return this.prisma.medicalDocument.create({ data });
+  async create(data: Prisma.MedicalDocumentUncheckedCreateInput): Promise<MedicalDocumentWithAssignee> {
+    return this.prisma.medicalDocument.create({ data, ...medicalDocumentWithAssigneeArgs });
   }
 
   async findByPatient(
     patientId: string,
     filters: FindDocumentsFilters,
-  ): Promise<{ documents: MedicalDocument[]; total: number }> {
+  ): Promise<{ documents: MedicalDocumentWithAssignee[]; total: number }> {
     const where: Prisma.MedicalDocumentWhereInput = {
       patientId,
       ...(filters.status && { status: filters.status }),
@@ -76,6 +88,7 @@ export class MedicalDocumentsRepository {
         orderBy: { createdAt: 'desc' },
         skip,
         take: filters.limit,
+        ...medicalDocumentWithAssigneeArgs,
       }),
       this.prisma.medicalDocument.count({ where }),
     ]);
@@ -83,8 +96,11 @@ export class MedicalDocumentsRepository {
     return { documents, total };
   }
 
-  async findByIdAndPatient(id: string, patientId: string): Promise<MedicalDocument | null> {
-    return this.prisma.medicalDocument.findFirst({ where: { id, patientId } });
+  async findByIdAndPatient(id: string, patientId: string): Promise<MedicalDocumentWithAssignee | null> {
+    return this.prisma.medicalDocument.findFirst({
+      where: { id, patientId },
+      ...medicalDocumentWithAssigneeArgs,
+    });
   }
 
   /**
@@ -113,7 +129,7 @@ export class MedicalDocumentsRepository {
     keyword: string,
     page: number,
     limit: number,
-  ): Promise<{ documents: MedicalDocument[]; total: number }> {
+  ): Promise<{ documents: MedicalDocumentWithAssignee[]; total: number }> {
     const where: Prisma.MedicalDocumentWhereInput = {
       patientId,
       OR: [
@@ -130,6 +146,7 @@ export class MedicalDocumentsRepository {
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
+        ...medicalDocumentWithAssigneeArgs,
       }),
       this.prisma.medicalDocument.count({ where }),
     ]);
@@ -141,10 +158,11 @@ export class MedicalDocumentsRepository {
     id: string,
     status: DocumentStatus,
     extra?: UpdateStatusExtra,
-  ): Promise<MedicalDocument> {
+  ): Promise<MedicalDocumentWithAssignee> {
     return this.prisma.medicalDocument.update({
       where: { id },
       data: { status, ...extra, version: { increment: 1 } },
+      ...medicalDocumentWithAssigneeArgs,
     });
   }
 
@@ -152,20 +170,22 @@ export class MedicalDocumentsRepository {
     id: string,
     patientId: string,
     expectedVersion: number,
+    assignedReviewerId: string,
     data: SaveCorrectionData,
-  ): Promise<MedicalDocument | null> {
+  ): Promise<MedicalDocumentWithAssignee | null> {
     return this.prisma.$transaction(async (tx) => {
       const result = await tx.medicalDocument.updateMany({
         where: {
           id,
           patientId,
           status: DocumentStatus.PROCESSED,
+          assignedReviewerId,
           version: expectedVersion,
         },
         data: { ...data, version: { increment: 1 } },
       });
       if (result.count !== 1) return null;
-      return tx.medicalDocument.findUnique({ where: { id } });
+      return tx.medicalDocument.findUnique({ where: { id }, ...medicalDocumentWithAssigneeArgs });
     });
   }
 
@@ -178,14 +198,16 @@ export class MedicalDocumentsRepository {
     id: string,
     patientId: string,
     expectedVersion: number,
+    assignedReviewerId: string,
     data: ValidateWithCorrectionData,
-  ): Promise<MedicalDocument | null> {
+  ): Promise<MedicalDocumentWithAssignee | null> {
     return this.prisma.$transaction(async (tx) => {
       const result = await tx.medicalDocument.updateMany({
         where: {
           id,
           patientId,
           status: DocumentStatus.PROCESSED,
+          assignedReviewerId,
           version: expectedVersion,
         },
         data: {
@@ -196,7 +218,7 @@ export class MedicalDocumentsRepository {
         },
       });
       if (result.count !== 1) return null;
-      return tx.medicalDocument.findUnique({ where: { id } });
+      return tx.medicalDocument.findUnique({ where: { id }, ...medicalDocumentWithAssigneeArgs });
     });
   }
 
@@ -204,14 +226,18 @@ export class MedicalDocumentsRepository {
     id: string,
     patientId: string,
     expectedVersion: number,
+    assignedReviewerId: string,
     data: RejectDocumentData,
-  ): Promise<MedicalDocument | null> {
+  ): Promise<MedicalDocumentWithAssignee | null> {
     return this.prisma.$transaction(async (tx) => {
       const result = await tx.medicalDocument.updateMany({
         where: {
           id,
           patientId,
-          status: { in: [DocumentStatus.PENDING, DocumentStatus.PROCESSED] },
+          OR: [
+            { status: DocumentStatus.PENDING },
+            { status: DocumentStatus.PROCESSED, assignedReviewerId },
+          ],
           version: expectedVersion,
         },
         data: {
@@ -224,7 +250,7 @@ export class MedicalDocumentsRepository {
         },
       });
       if (result.count !== 1) return null;
-      return tx.medicalDocument.findUnique({ where: { id } });
+      return tx.medicalDocument.findUnique({ where: { id }, ...medicalDocumentWithAssigneeArgs });
     });
   }
 }

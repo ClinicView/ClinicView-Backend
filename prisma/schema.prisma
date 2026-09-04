@@ -49,6 +49,13 @@ enum DocumentStatus {
   REJECTED // Rechazado por revisor clínico
 }
 
+enum ReviewPriority {
+  URGENT
+  HIGH
+  NORMAL
+  LOW
+}
+
 enum DocumentType {
   DNI
   CE
@@ -100,6 +107,7 @@ model User {
   clinicalRecordDrafts             ClinicalRecordDraft[]      @relation("ClinicalRecordDraftActor")
   patientRegistrationDraft         PatientRegistrationDraft?  @relation("PatientRegistrationDraftActor")
   auditEvents                      AuditEvent[]                @relation("AuditEventActor")
+  assignedDocumentReviews          MedicalDocument[]           @relation("MedicalDocumentAssignedReviewer")
   uploadedClinicalMedia            ClinicalMediaAsset[]       @relation("ClinicalMediaUploader")
   createdClinicalRecordAttachments ClinicalRecordAttachment[] @relation("ClinicalRecordAttachmentCreator")
 
@@ -426,15 +434,21 @@ model MedicalDocument {
   validationChecklist  Json?          @map("validation_checklist")
   validationAttested   Boolean        @default(false) @map("validation_attested")
   validationAttestedAt DateTime?      @map("validation_attested_at")
+  reviewPriority       ReviewPriority @default(NORMAL) @map("review_priority")
+  assignedReviewerId   String?        @map("assigned_reviewer_id") @db.Uuid
+  assignedAt           DateTime?      @map("assigned_at") @db.Timestamptz(3)
   createdAt            DateTime       @default(now()) @map("created_at")
   createdBy            String?        @map("created_by") @db.Uuid
   updatedAt            DateTime       @updatedAt @map("updated_at")
   updatedBy            String?        @map("updated_by") @db.Uuid
   version              Int            @default(0)
 
-  patient Patient @relation(fields: [patientId], references: [id])
+  patient          Patient @relation(fields: [patientId], references: [id])
+  assignedReviewer User?   @relation("MedicalDocumentAssignedReviewer", fields: [assignedReviewerId], references: [id], onDelete: Restrict)
 
   @@index([patientId, createdAt(sort: Desc)])
   @@index([status])
+  @@index([status, reviewPriority, processedAt])
+  @@index([assignedReviewerId, status])
   @@map("medical_documents")
 }

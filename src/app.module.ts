@@ -23,6 +23,7 @@ import { PatientsModule } from './modules/patients/patients.module';
 import { ReviewModule } from './modules/review/review.module';
 import { RolesModule } from './modules/roles/roles.module';
 import { UsersModule } from './modules/users/users.module';
+import { GlobalSearchModule } from './modules/search/global-search.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { UsersModule } from './modules/users/users.module';
     MedicalDocumentsModule,
     NotificationsModule,
     ReviewModule,
+    GlobalSearchModule,
   ],
   controllers: [AppController],
   providers: [

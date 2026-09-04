@@ -236,6 +236,7 @@ describe('ClinicalRecordsService', () => {
           summary: 'Control.',
           details: consultationDetails,
           draftId: '20000000-0000-4000-8000-000000000001',
+          expectedDraftVersion: 3,
         },
         'user-uuid',
       );
@@ -244,8 +245,41 @@ describe('ClinicalRecordsService', () => {
         '20000000-0000-4000-8000-000000000001',
         'patient-uuid',
         'user-uuid',
+        3,
         mockTx,
       );
+    });
+
+    it('exige enviar juntos el identificador y la versión del borrador', async () => {
+      await expect(
+        service.create(
+          'patient-uuid',
+          {
+            recordType: RecordType.CONSULTATION,
+            attendedAt: '2026-06-01T10:00:00Z',
+            summary: 'Control.',
+            details: consultationDetails,
+            draftId: '20000000-0000-4000-8000-000000000001',
+          },
+          'user-uuid',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+
+      await expect(
+        service.create(
+          'patient-uuid',
+          {
+            recordType: RecordType.CONSULTATION,
+            attendedAt: '2026-06-01T10:00:00Z',
+            summary: 'Control.',
+            details: consultationDetails,
+            expectedDraftVersion: 0,
+          },
+          'user-uuid',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('aborta si el draftId no es vigente o no pertenece al actor', async () => {
@@ -260,6 +294,7 @@ describe('ClinicalRecordsService', () => {
             summary: 'Control.',
             details: consultationDetails,
             draftId: '20000000-0000-4000-8000-000000000001',
+            expectedDraftVersion: 0,
           },
           'user-uuid',
         ),
@@ -281,6 +316,7 @@ describe('ClinicalRecordsService', () => {
             details: consultationDetails,
             attachments: [attachment],
             draftId: '20000000-0000-4000-8000-000000000001',
+            expectedDraftVersion: 0,
           },
           'user-uuid',
         ),

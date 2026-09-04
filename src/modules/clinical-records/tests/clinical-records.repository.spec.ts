@@ -86,4 +86,28 @@ describe('ClinicalRecordsRepository optimistic concurrency', () => {
       where: { id: 'draft-id', actorId: 'actor-id', version: 7 },
     });
   });
+
+  it('consume un borrador vigente solo con su identidad y versión exactas', async () => {
+    clinicalRecordDraft.deleteMany.mockResolvedValue({ count: 1 });
+
+    await expect(
+      repository.deleteDraftByIdForActor(
+        'draft-id',
+        'patient-id',
+        'actor-id',
+        9,
+        tx,
+      ),
+    ).resolves.toBe(true);
+
+    expect(clinicalRecordDraft.deleteMany).toHaveBeenCalledWith({
+      where: {
+        id: 'draft-id',
+        patientId: 'patient-id',
+        actorId: 'actor-id',
+        version: 9,
+        expiresAt: { gt: expect.any(Date) },
+      },
+    });
+  });
 });

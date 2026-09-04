@@ -9,6 +9,7 @@ import {
   IsString,
   IsUUID,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
@@ -125,4 +126,14 @@ export class CreateRecordDto {
   @IsOptional()
   @IsUUID()
   draftId?: string;
+
+  @ApiPropertyOptional({
+    minimum: 0,
+    description:
+      'Versión observada del borrador. Es obligatoria cuando se envía draftId y se consume mediante CAS.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  expectedDraftVersion?: number;
 }

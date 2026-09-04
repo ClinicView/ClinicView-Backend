@@ -191,10 +191,17 @@ export class ClinicalRecordsRepository {
     id: string,
     patientId: string,
     actorId: string,
+    expectedVersion: number,
     tx: Prisma.TransactionClient,
   ): Promise<boolean> {
     const deleted = await tx.clinicalRecordDraft.deleteMany({
-      where: { id, patientId, actorId, expiresAt: { gt: new Date() } },
+      where: {
+        id,
+        patientId,
+        actorId,
+        version: expectedVersion,
+        expiresAt: { gt: new Date() },
+      },
     });
     return deleted.count === 1;
   }

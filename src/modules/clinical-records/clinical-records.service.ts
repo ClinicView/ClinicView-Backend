@@ -93,6 +93,7 @@ export class ClinicalRecordsService {
     actorId: string,
   ): Promise<RecordResponseDto> {
     this.requireActor(actorId);
+    this.assertDraftIdentityPair(dto.draftId, dto.expectedDraftVersion);
     const details = this.normalizeDetails(dto.recordType, dto.details);
     const schemaVersion = dto.schemaVersion ?? CLINICAL_RECORD_SCHEMA_VERSION;
 
@@ -134,6 +135,7 @@ export class ClinicalRecordsService {
           dto.draftId,
           patientId,
           actorId,
+          dto.expectedDraftVersion as number,
           tx,
         );
         if (!consumed) {
@@ -538,6 +540,14 @@ export class ClinicalRecordsService {
   private requireActor(actorId: string): void {
     if (!actorId?.trim()) {
       throw new UnauthorizedException('No se pudo identificar al usuario autenticado.');
+    }
+  }
+
+  private assertDraftIdentityPair(id?: string, version?: number): void {
+    if ((id === undefined) !== (version === undefined)) {
+      throw new BadRequestException(
+        'La identidad y la versión del borrador deben enviarse juntas.',
+      );
     }
   }
 

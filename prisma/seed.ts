@@ -53,6 +53,7 @@ const ROLES = [
 // El código verifica PERMISOS, no roles hardcodeados (RBAC por capacidad).
 
 const PERMISSIONS = [
+  { key: 'catalogs.manage', description: 'Administrar servicios y especialidades institucionales.' },
   // Usuarios (módulo users)
   { key: 'users.read', description: 'Consultar listado y perfil de usuarios del sistema.' },
   { key: 'users.create', description: 'Crear nuevos usuarios del sistema.' },

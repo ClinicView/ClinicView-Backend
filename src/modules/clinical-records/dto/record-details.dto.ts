@@ -145,6 +145,7 @@ export class VitalSignsDto {
 }
 
 export class ConsultationDetailsV1Dto {
+  @ApiPropertyOptional({ maxLength: 2000 }) @OptionalClinicalText(2000) careInstructions?: string;
   @ApiProperty({ maxLength: 1000 })
   @RequiredClinicalText(1000)
   chiefComplaint: string;
@@ -182,6 +183,7 @@ export class ConsultationDetailsV1Dto {
 }
 
 export class EvolutionDetailsV1Dto {
+  @ApiPropertyOptional({ maxLength: 1000 }) @OptionalClinicalText(1000) disposition?: string;
   @ApiProperty({ maxLength: 4000 })
   @RequiredClinicalText(4000)
   evolution: string;
@@ -238,6 +240,11 @@ export class LabResultItemDto {
 }
 
 export class LabResultDetailsV1Dto {
+  @ApiPropertyOptional({ maxLength: 1000 }) @OptionalClinicalText(1000) methodology?: string;
+  @ApiPropertyOptional({ maxLength: 1000 }) @OptionalClinicalText(1000) sampleCondition?: string;
+  @ApiPropertyOptional({ maxLength: 2000 })
+  @OptionalClinicalText(2000)
+  criticalResultCommunication?: string;
   @ApiProperty({ maxLength: 300 })
   @RequiredClinicalText(300)
   studyName: string;
@@ -312,6 +319,7 @@ export class PrescriptionMedicationDto {
 }
 
 export class PrescriptionDetailsV1Dto {
+  @ApiPropertyOptional({ maxLength: 2000 }) @OptionalClinicalText(2000) safetyReview?: string;
   @ApiPropertyOptional({ maxLength: 1000 })
   @OptionalClinicalText(1000)
   indication?: string;
@@ -345,6 +353,10 @@ export const CONSENT_STATUSES = ['DOCUMENTED', 'NOT_REQUIRED', 'UNKNOWN'] as con
 export type ConsentStatus = (typeof CONSENT_STATUSES)[number];
 
 export class ProcedureDetailsV1Dto {
+  @ApiPropertyOptional({ maxLength: 2000 }) @OptionalClinicalText(2000) materials?: string;
+  @ApiPropertyOptional({ maxLength: 1000 })
+  @OptionalClinicalText(1000)
+  specimenDestination?: string;
   @ApiProperty({ maxLength: 300 })
   @RequiredClinicalText(300)
   procedureName: string;
@@ -407,6 +419,13 @@ export class TherapyMeasurementDto {
 }
 
 export class TherapyNoteDetailsV1Dto {
+  @ApiPropertyOptional({ maxLength: 1000 }) @OptionalClinicalText(1000) tolerance?: string;
+  @ApiPropertyOptional({ minimum: 1, maximum: 1440 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(1440)
+  sessionDurationMinutes?: number;
   @ApiProperty({ maxLength: 200 })
   @RequiredClinicalText(200)
   discipline: string;
@@ -453,6 +472,8 @@ export class TherapyNoteDetailsV1Dto {
 }
 
 export class OtherDetailsV1Dto {
+  @ApiPropertyOptional({ maxLength: 300 }) @OptionalClinicalText(300) recipient?: string;
+  @ApiPropertyOptional({ maxLength: 1000 }) @OptionalClinicalText(1000) purpose?: string;
   @ApiProperty({ maxLength: 300 })
   @RequiredClinicalText(300)
   title: string;

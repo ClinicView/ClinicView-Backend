@@ -43,6 +43,7 @@ const clinicalHistoryExportArgs = {
         professionalNameSnapshot: true,
         professionalLicenseSnapshot: true,
         service: true,
+        specialty: true,
         preliminaryDiagnosis: true,
         plan: true,
         priority: true,

@@ -17,6 +17,7 @@ import { IaClientModule } from './core/ia/ia-client.module';
 import { StorageModule } from './core/storage/storage.module';
 import { ClinicalRecordsModule } from './modules/clinical-records/clinical-records.module';
 import { ClinicalEpisodesModule } from './modules/clinical-episodes/clinical-episodes.module';
+import { ClinicalCatalogsModule } from './modules/clinical-catalogs/clinical-catalogs.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { MedicalDocumentsModule } from './modules/medical-documents/medical-documents.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -42,6 +43,7 @@ import { GlobalSearchModule } from './modules/search/global-search.module';
     PatientsModule,
     ClinicalRecordsModule,
     ClinicalEpisodesModule,
+    ClinicalCatalogsModule,
     DashboardModule,
     MedicalDocumentsModule,
     NotificationsModule,

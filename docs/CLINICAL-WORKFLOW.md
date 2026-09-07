@@ -69,3 +69,25 @@ paciente y la inmutabilidad del historial de agrupación. No se elimina un episo
 la apertura equivocada se documenta editando con motivo, sin borrar el historial.
 Listas e historial se paginan de 20. Los conteos provienen de toda la base y
 separan versiones de atenciones activas y pendientes de confirmación.
+
+## Catálogos y plantillas
+
+Migración 20260907160000_clinical_catalogs: servicios/especialidades compartidos,
+opciones iniciales no clínicas y campo specialty opcional en las atenciones.
+GET clinical-catalogs es autenticado, paginado de 20 y admite kind, status y q.
+POST/PATCH requieren catalogs.manage (administrador base; configurable por rol).
+Código/tipo son estables; nombre/disponibilidad requieren CAS. La normalización
+impide duplicar nombres por mayúsculas o tildes. No hay borrado de opciones.
+
+Servicio y especialidad se conservan como texto histórico en cada atención.
+Los catálogos son sugerencias: un original externo puede consignar otro nombre.
+Renombrar/desactivar no reescribe registros, borradores ni documentos existentes.
+
+Las siete plantillas v1 se amplían aditivamente con campos opcionales de orientación,
+destino, método/condición de muestra/comunicación crítica, verificaciones de seguridad,
+materiales/destino de muestras, duración/tolerancia de terapia y destinatario/finalidad.
+La duración admite minutos enteros de 1 a 1440. La ausencia no afirma normalidad.
+No se calculan pautas, no se verifican interacciones ni se envían alertas críticas
+automáticas por registrar una comunicación. Detalle, corrección y exportación
+conservan los campos. La huella de confirmación incluye specialty cuando existe,
+sin cambiar la huella de registros anteriores que carecen de ese campo.

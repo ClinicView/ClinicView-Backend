@@ -237,6 +237,7 @@ export class PatientsService {
         professionalNameSnapshot: record.professionalNameSnapshot,
         professionalLicenseSnapshot: record.professionalLicenseSnapshot,
         service: record.service,
+        specialty: record.specialty ?? null,
         preliminaryDiagnosis: record.preliminaryDiagnosis,
         plan: record.plan,
         priority: record.priority,

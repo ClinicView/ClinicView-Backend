@@ -32,6 +32,7 @@ export function clinicalContentHash(record: RecordWithCount): string {
     doctorName: record.doctorName,
     license: record.professionalLicenseSnapshot,
     service: record.service,
+    ...(record.specialty ? { specialty: record.specialty } : {}),
     diagnosis: record.preliminaryDiagnosis,
     plan: record.plan,
     priority: record.priority,

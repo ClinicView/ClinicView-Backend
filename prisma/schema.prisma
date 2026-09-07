@@ -334,6 +334,7 @@ model ClinicalRecord {
   professionalNameSnapshot    String? @map("professional_name_snapshot")
   professionalLicenseSnapshot String? @map("professional_license_snapshot")
   service                     String?
+  specialty                   String? @db.VarChar(120)
   preliminaryDiagnosis        String? @map("preliminary_diagnosis")
   plan                        String?
   priority                    String  @default("NORMAL")
@@ -571,4 +572,19 @@ model ClinicalEpisodeEvent {
   episode ClinicalEpisode @relation(fields: [episodeId], references: [id], onDelete: Restrict)
   @@index([episodeId, createdAt(sort: Desc), id])
   @@map("clinical_episode_events")
+}
+
+model ClinicalCatalogEntry {
+  id String @id @default(uuid()) @db.Uuid
+  kind String
+  code String @db.VarChar(40)
+  name String @db.VarChar(120)
+  normalizedName String @map("normalized_name") @db.VarChar(120)
+  isActive Boolean @default(true) @map("is_active")
+  version Int @default(0)
+  updatedBy String? @map("updated_by") @db.Uuid
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@unique([kind, code])
+  @@unique([kind, normalizedName])
+  @@map("clinical_catalog_entries")
 }

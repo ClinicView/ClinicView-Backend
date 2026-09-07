@@ -165,6 +165,7 @@ export class ClinicalRecordsService {
               schemaVersion,
               ...professional,
               service: optionalText(dto.service),
+              specialty: optionalText(dto.specialty),
               preliminaryDiagnosis: optionalText(dto.preliminaryDiagnosis),
               plan: optionalText(dto.plan),
               priority: dto.priority ?? 'NORMAL',
@@ -353,6 +354,7 @@ export class ClinicalRecordsService {
             schemaVersion,
             ...professional,
             service: hasOwn(dto, 'service') ? optionalText(dto.service) : original.service,
+            specialty: hasOwn(dto, 'specialty') ? optionalText(dto.specialty) : original.specialty,
             preliminaryDiagnosis: hasOwn(dto, 'preliminaryDiagnosis')
               ? optionalText(dto.preliminaryDiagnosis)
               : original.preliminaryDiagnosis,
@@ -789,6 +791,7 @@ export class ClinicalRecordsService {
       professionalNameSnapshot: record.professionalNameSnapshot,
       professionalLicenseSnapshot: record.professionalLicenseSnapshot,
       service: record.service,
+      specialty: record.specialty ?? null,
       preliminaryDiagnosis: record.preliminaryDiagnosis,
       plan: record.plan,
       priority: record.priority,

@@ -1493,6 +1493,29 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     expect(exported.body.records.find((item) => item.id === corrected.body.id)?.episode?.id).toBe(id);
   });
 
+  it('administra catálogos con CAS sin reescribir las instantáneas clínicas', async () => {
+    type Catalog = { id: string; name: string; version: number; isActive: boolean };
+    const body = { kind: 'SPECIALTY', code: 'E2E_ESP', name: 'Especialidad sintética' };
+    const create = (payload: object, token = clinicianToken) => jsonRequest<Catalog>(baseUrl, '/api/clinical-catalogs', { method: 'POST', headers: jsonHeaders(token), body: JSON.stringify(payload) });
+    expect((await create(body, readerToken)).response.status).toBe(403);
+    const created = await create(body);
+    expect(created.response.status).toBe(201);
+    expect((await create({ ...body, code: 'E2E_OTRO', name: 'Especialidad sintetica' })).response.status).toBe(409);
+    const record = await jsonRequest<RecordResponse & { specialty: string }>(baseUrl, `/api/patients/${patientId}/records`, { method: 'POST', headers: jsonHeaders(clinicianToken), body: JSON.stringify({ recordType: 'CONSULTATION', attendancePrecision: 'DAY', attendedAt: '2023-09-27', summary: CLINICAL_E2E_PHI.recordSummary, doctorName: 'Profesional sintético', specialty: body.name, service: 'Servicio histórico externo', details: { ...VALID_RECORD_DETAILS.CONSULTATION, careInstructions: 'Orientación efectivamente documentada' } }) });
+    expect(record.response.status).toBe(201);
+    const update = (version: number) => jsonRequest<Catalog>(baseUrl, `/api/clinical-catalogs/${created.body.id}`, { method: 'PATCH', headers: jsonHeaders(clinicianToken), body: JSON.stringify({ expectedVersion: version, name: 'Nombre nuevo sintético', isActive: false }) });
+    expect((await update(0)).response.status).toBe(200);
+    expect((await update(0)).response.status).toBe(409);
+    const active = await jsonRequest<{ data: Catalog[] }>(baseUrl, '/api/clinical-catalogs?kind=SPECIALTY&q=Nombre%20nuevo', { headers: jsonHeaders(readerToken) });
+    expect(active.body.data).toHaveLength(0);
+    const inactive = await jsonRequest<{ data: Catalog[] }>(baseUrl, '/api/clinical-catalogs?status=INACTIVE&q=Nombre%20nuevo', { headers: jsonHeaders(readerToken) });
+    expect(inactive.body.data[0]?.id).toBe(created.body.id);
+    const exported = await jsonRequest<{ records: Array<{ id: string; specialty: string; details: { careInstructions: string } }> }>(baseUrl, `/api/patients/${patientId}/clinical-history/export`, { headers: jsonHeaders(readerToken) });
+    const saved = exported.body.records.find((entry) => entry.id === record.body.id);
+    expect(saved?.specialty).toBe(body.name);
+    expect(saved?.details.careInstructions).toBe('Orientación efectivamente documentada');
+  });
+
   it('no persiste PHI de payloads clínicos en la bitácora', async () => {
     const events = await prisma.auditEvent.findMany({ orderBy: { occurredAt: 'asc' } });
     expect(events.length).toBeGreaterThan(0);

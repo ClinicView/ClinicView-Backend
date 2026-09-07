@@ -83,6 +83,7 @@ export class CorrectRecordDto {
   @IsString()
   @MaxLength(120)
   service?: string | null;
+  @ApiPropertyOptional({ maxLength: 120, nullable: true, type: String }) @IsOptional() @IsString() @MaxLength(120) specialty?: string | null;
 
   @ApiPropertyOptional({ maxLength: 300, nullable: true })
   @IsOptional()

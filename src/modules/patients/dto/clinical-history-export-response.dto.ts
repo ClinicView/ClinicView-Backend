@@ -59,6 +59,7 @@ export class ClinicalHistoryExportRecordDto {
   @ApiPropertyOptional({ type: String, nullable: true })
   professionalLicenseSnapshot: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) service: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) specialty: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) preliminaryDiagnosis: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) plan: string | null;
   @ApiProperty({ enum: ['URGENT', 'PRIORITY', 'NORMAL', 'ELECTIVE'] }) priority: string;

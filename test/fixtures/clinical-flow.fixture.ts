@@ -15,6 +15,7 @@ export const CLINICAL_E2E_PHI = {
 } as const;
 
 const CLINICAL_PERMISSIONS = [
+  'catalogs.manage',
   'patients.read',
   'patients.create',
   'patients.update',

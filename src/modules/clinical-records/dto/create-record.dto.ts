@@ -88,6 +88,7 @@ export class CreateRecordDto {
   @IsString()
   @MaxLength(120)
   service?: string;
+  @ApiPropertyOptional({ maxLength: 120 }) @IsOptional() @IsString() @MaxLength(120) specialty?: string;
 
   @ApiPropertyOptional({ maxLength: 300 })
   @IsOptional()

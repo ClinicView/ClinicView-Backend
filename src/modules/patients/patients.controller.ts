@@ -33,6 +33,7 @@ import { Audited } from '../audit/audit.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { ClinicalHistoryExportResponseDto } from './dto/clinical-history-export-response.dto';
+import { HistoryExportQueryDto } from './dto/history-query.dto';
 import { FindPatientsQueryDto } from './dto/find-patients-query.dto';
 import { PatientResponseDto } from './dto/patient-response.dto';
 import {
@@ -156,8 +157,9 @@ export class PatientsController {
   exportClinicalHistory(
     @Param('id', ParseUUIDPipe) id: string,
     @Request() request: AuthRequest,
+    @Query() query: HistoryExportQueryDto,
   ): Promise<ClinicalHistoryExportResponseDto> {
-    return this.patientsService.exportClinicalHistory(id, request.user.sub);
+    return this.patientsService.exportClinicalHistory(id, request.user.sub, query);
   }
 
   @Get(':id')

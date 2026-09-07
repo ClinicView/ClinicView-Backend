@@ -22,6 +22,10 @@ const clinicalHistoryExportArgs = {
     insuranceName: true,
     insuranceNumber: true,
     clinicalSummaryRevisions: { orderBy: { version: 'desc' } },
+    clinicalEpisodes: {
+      orderBy: [{ startedOn: 'asc' }, { id: 'asc' }],
+      include: { events: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
+    },
     clinicalRecords: {
       select: {
         id: true,

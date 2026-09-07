@@ -91,3 +91,50 @@ No se calculan pautas, no se verifican interacciones ni se envían alertas crít
 automáticas por registrar una comunicación. Detalle, corrección y exportación
 conservan los campos. La huella de confirmación incluye specialty cuando existe,
 sin cambiar la huella de registros anteriores que carecen de ese campo.
+
+## Búsqueda, indicadores, pendientes y exportación
+
+GET patients/:id/clinical-history/search consulta toda la historia en PostgreSQL,
+con páginas de 20 y total filtrado consistente por petición. Admite q, kind,
+recordType, status, confirmation, from/to, episodeId y versions. Busca texto,
+campos tipados y procedencia; el contenido documental solo se busca si está
+VALIDATED. Los filtros se combinan y el texto no depende de tildes españolas.
+Los valores se parametrizan y las búsquedas se auditan sin guardar el texto buscado.
+Lectura: patients.read más records.read o documents.read; cada fuente y su conteo
+se restringen al permiso correspondiente. Fechas civiles válidas en Lima, períodos
+documentales por solapamiento y fechas desconocidas excluidas al filtrar por fecha.
+Los archivos sin fecha solo usan carga como orden alternativo explícito.
+
+GET patients/:id/clinical-history/overview calcula los indicadores sobre toda la
+base: versiones, atenciones vigentes, confirmaciones pendientes, documentos,
+validados, pendientes y episodios abiertos. Un indicador sin permiso es null,
+no cero. No se infiere fecha clínica a partir de una carga. Listas y conteos usan
+RepeatableRead; navegar páginas distintas no equivale a una instantánea congelada.
+
+GET clinical-work ofrece pendientes actuales personales (20 por página; hasta
+50): atenciones creadas por el usuario o a su cargo sin confirmación, originales
+asignados pendientes de revisar y borradores propios sin vencer. Exige permisos
+de lectura y acción de cada tipo, y paciente activo. La lista se calcula en vivo;
+no persiste copias de contenido clínico ni crea notificaciones duplicadas. No se
+marca una tarea como resuelta leyendo una notificación. Recargar actualiza el estado.
+
+GET patients/:id/clinical-history/export conserva la exportación completa por
+defecto. Opcionales from/to, episodeId y versions=CURRENT generan un alcance
+FILTERED declarado. La selección parte de la instantánea completa del servidor,
+no de páginas del navegador. Incluye contexto longitudinal e historial completo
+de episodios seleccionados como antecedentes explícitos. Conserva originales
+citados incluso fuera del período/sin fecha/no vigentes, siempre sin exportar texto
+documental no validado. No duplica originales por múltiples citas. Un episodio
+ajeno/no encontrado devuelve 404; un rango invertido, 400. La versión completa
+incluye corregidos/anulados y todos los estados documentales sin reinterpretarlos.
+
+Verificado: 418 pruebas unitarias y 26 E2E en PostgreSQL aislado, incluidos más de
+60 registros, coincidencias antiguas, fechas, permisos por fuente, selección de
+episodio, originales fuera del período, pendientes propios y ausencia de PHI en
+auditoría. No se requiere otra migración para este bloque.
+
+## Exclusión expresa
+
+El punto 6 (seguridad/infraestructura de despliegue, MFA y alcance institucional)
+se pospone por instrucción del usuario. No se modificó ni ejecutó el repositorio
+de IA. Esta entrega funcional no acredita preparación legal o técnica para nube.

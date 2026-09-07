@@ -11,7 +11,8 @@ import { ClinicalRecordAttachmentResponseDto } from '../../clinical-records/dto/
 import { PatientContextDto } from './patient-context.dto';
 import { RecordSourceDto } from '../../clinical-records/dto/publish-record.dto';
 import { RecordConfirmationDto } from '../../clinical-records/dto/confirm-record.dto';
-import { EpisodeDto } from '../../clinical-episodes/episode.dto';
+import { EpisodeDto, EpisodeEventDto } from '../../clinical-episodes/episode.dto';
+import { HistoryExportScopeDto } from './history-query.dto';
 import { ClinicalSummaryResponseDto } from './clinical-summary.dto';
 import {
   DocumentClinicalMetadataDto,
@@ -104,7 +105,13 @@ export class ClinicalHistoryExportDocumentDto {
   @ApiPropertyOptional({ type: String, nullable: true }) updatedBy: string | null;
 }
 
+export class ClinicalHistoryExportEpisodeDto extends EpisodeDto {
+  @ApiProperty({ type: [EpisodeEventDto] }) events: EpisodeEventDto[];
+}
+
 export class ClinicalHistoryExportResponseDto {
+  @ApiProperty({ type: HistoryExportScopeDto }) scope: HistoryExportScopeDto;
+  @ApiProperty({ type: [ClinicalHistoryExportEpisodeDto] }) episodes: ClinicalHistoryExportEpisodeDto[];
   @ApiProperty({
     type: [ClinicalSummaryResponseDto],
     description: 'Todas las revisiones longitudinales; la primera es la vigente al exportar.',

@@ -20,15 +20,15 @@
 Aplicar `npm run prisma:migrate:deploy` y regenerar Prisma antes de iniciar esta
 versión. Desplegar coordinadamente con el frontend que envía `expectedVersion`.
 
-## Siguientes bloques del alcance aprobado
+## Estado de los bloques del alcance aprobado
 
 1. Metadatos clínicos, fecha/rango, procedencia y confirmación de carga: completado en el bloque 2.
-2. Publicación humana de un documento validado como registro digitalizado enlazado.
+2. Publicación humana de un documento validado como registro digitalizado enlazado: completado.
 3. Autoría profesional, finalización y episodios; diferenciar atestación de firma
-   digital certificada (esta última requiere una integración real).
-4. Catálogos institucionales y ampliación discriminada de plantillas.
-5. Filtros, paginación completa, indicadores, notificaciones y exportación avanzada.
-6. Seguridad de despliegue: MFA y alcance institucional/paciente. Una publicación
+   digital certificada (esta última requiere una integración real): completado el cierre interno y los episodios.
+4. Catálogos institucionales y ampliación discriminada de plantillas: completado.
+5. Filtros, paginación completa, indicadores, pendientes y exportación avanzada: completado; ver CLINICAL-WORKFLOW.md.
+6. Pospuesto expresamente: seguridad de despliegue, MFA y alcance institucional/paciente. Una publicación
    real en nube requiere elegir infraestructura y configurar sus credenciales;
    no queda implícitamente autorizada una contratación ni acreditación legal.
 
@@ -45,8 +45,9 @@ fechas iguales. Se mantienen permisos, límites y aislamiento por paciente.
 La ficha permite cargar páginas sucesivas, informa cobertura parcial y ofrece
 filtros locales explícitos. Esto no convierte la consulta paginada en una
 instantánea: ante cambios concurrentes se puede recargar. La exportación completa
-conserva su transacción de instantánea independiente. La búsqueda global de todo
-el contenido y los demás elementos del bloque 5 siguen pendientes.
+conserva su transacción de instantánea independiente. La nueva ruta clinical-history/search
+consulta toda la historia del paciente desde el servidor; los filtros locales de
+la ficha siguen identificados como filtros de contenido cargado.
 
 ## Bloque 2: fechas clínicas y procedencia documental
 

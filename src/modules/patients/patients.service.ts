@@ -1,6 +1,8 @@
 import { recordSourceResponse } from '../clinical-records/record-source';
 import { recordConfirmationResponse } from '../clinical-records/record-confirmation';
 import { episodeResponse } from '../clinical-episodes/episode-state';
+import { HistoryExportQueryDto } from './dto/history-query.dto';
+import { applyClinicalHistoryScope } from './clinical-history-scope';
 import {
   BadRequestException,
   ConflictException,
@@ -196,6 +198,7 @@ export class PatientsService {
   async exportClinicalHistory(
     id: string,
     actorId: string,
+    query: HistoryExportQueryDto = {},
   ): Promise<ClinicalHistoryExportResponseDto> {
     if (!actorId) throw new UnauthorizedException('No se pudo identificar al usuario autenticado.');
     const snapshot = await this.patientsRepository.findClinicalHistoryForExport(id);
@@ -205,120 +208,137 @@ export class PatientsService {
       clinicalRecords,
       medicalDocuments,
       clinicalSummaryRevisions = [],
+      clinicalEpisodes = [],
       ...patient
     } = snapshot;
 
-    const result: ClinicalHistoryExportResponseDto = {
-      clinicalSummaryRevisions: clinicalSummaryRevisions.map((revision) => ({
-        ...revision,
-        payload: revision.payload as unknown as ClinicalSummaryPayloadDto,
-      })),
-      patient: {
-        ...patient,
-        dateOfBirth: databaseDateToDateOnly(patient.dateOfBirth),
-      },
-      records: clinicalRecords.map((record) => ({
-        id: record.id,
-        recordType: record.recordType,
-        origin: record.origin,
-        status: record.status,
-        attendedAt: record.attendedAt,
-        attendancePrecision: record.attendancePrecision ?? 'INSTANT',
-        createdByNameSnapshot: record.createdByNameSnapshot ?? null,
-        source: recordSourceResponse(record.source),
-        confirmation: recordConfirmationResponse(record.confirmation),
-        episode: episodeResponse(record.episode),
-        summary: record.summary,
-        notes: record.notes,
-        details: record.details as Record<string, unknown>,
-        schemaVersion: record.schemaVersion,
-        doctorName: record.doctorName,
-        professionalId: record.professionalId,
-        professionalNameSnapshot: record.professionalNameSnapshot,
-        professionalLicenseSnapshot: record.professionalLicenseSnapshot,
-        service: record.service,
-        specialty: record.specialty ?? null,
-        preliminaryDiagnosis: record.preliminaryDiagnosis,
-        plan: record.plan,
-        priority: record.priority,
-        parentRecordId: record.parentRecordId,
-        voidReason: record.voidReason,
-        createdAt: record.createdAt,
-        createdBy: record.createdBy,
-        updatedAt: record.updatedAt,
-        updatedBy: record.updatedBy,
-        version: record.version,
-        attachments: [...record.attachments]
-          .sort(
-            (left, right) =>
-              left.sortOrder - right.sortOrder ||
-              left.createdAt.getTime() - right.createdAt.getTime() ||
-              left.id.localeCompare(right.id),
-          )
-          .map((attachment) => ({
-            id: attachment.id,
-            assetId: attachment.assetId,
-            sectionKey: attachment.sectionKey,
-            caption: attachment.caption,
-            altText: attachment.altText,
-            sortOrder: attachment.sortOrder,
-            createdBy: attachment.createdBy,
-            createdAt: attachment.createdAt,
-            asset: {
-              id: attachment.asset.id,
-              patientId: attachment.asset.patientId,
-              originalName: attachment.asset.originalName,
-              mimeType: attachment.asset.mimeType,
-              sizeBytes: attachment.asset.sizeBytes,
-              width: attachment.asset.width,
-              height: attachment.asset.height,
-              sha256: attachment.asset.sha256,
-              status: attachment.asset.status,
-              expiresAt: attachment.asset.expiresAt,
-              version: attachment.asset.version,
-              createdAt: attachment.asset.createdAt,
-              updatedAt: attachment.asset.updatedAt,
-              contentUrl: buildClinicalMediaContentUrl(
-                attachment.asset.patientId,
-                attachment.asset.id,
-              ),
-            },
+    const result = applyClinicalHistoryScope(
+      {
+        scope: { kind: 'COMPLETE', description: '', includesSourceDocumentsOutsidePeriod: false },
+        episodes: clinicalEpisodes.map((episode) => ({
+          ...episodeResponse(episode)!,
+          events: episode.events.map((event) => ({
+            id: event.id,
+            action: event.action,
+            actorName: event.actorName,
+            reason: event.reason,
+            recordId: event.recordId,
+            payload: event.payload as object,
+            createdAt: event.createdAt,
           })),
-      })),
-      documents: medicalDocuments.map((document) => {
-        const canExposeClinicalText = document.status === 'VALIDATED';
-        const correctedText = document.correctedText?.trim();
-        const ocrText = document.ocrText?.trim();
-        const clinicalText = canExposeClinicalText ? correctedText || ocrText || null : null;
+        })),
+        clinicalSummaryRevisions: clinicalSummaryRevisions.map((revision) => ({
+          ...revision,
+          payload: revision.payload as unknown as ClinicalSummaryPayloadDto,
+        })),
+        patient: {
+          ...patient,
+          dateOfBirth: databaseDateToDateOnly(patient.dateOfBirth),
+        },
+        records: clinicalRecords.map((record) => ({
+          id: record.id,
+          recordType: record.recordType,
+          origin: record.origin,
+          status: record.status,
+          attendedAt: record.attendedAt,
+          attendancePrecision: record.attendancePrecision ?? 'INSTANT',
+          createdByNameSnapshot: record.createdByNameSnapshot ?? null,
+          source: recordSourceResponse(record.source),
+          confirmation: recordConfirmationResponse(record.confirmation),
+          episode: episodeResponse(record.episode),
+          summary: record.summary,
+          notes: record.notes,
+          details: record.details as Record<string, unknown>,
+          schemaVersion: record.schemaVersion,
+          doctorName: record.doctorName,
+          professionalId: record.professionalId,
+          professionalNameSnapshot: record.professionalNameSnapshot,
+          professionalLicenseSnapshot: record.professionalLicenseSnapshot,
+          service: record.service,
+          specialty: record.specialty ?? null,
+          preliminaryDiagnosis: record.preliminaryDiagnosis,
+          plan: record.plan,
+          priority: record.priority,
+          parentRecordId: record.parentRecordId,
+          voidReason: record.voidReason,
+          createdAt: record.createdAt,
+          createdBy: record.createdBy,
+          updatedAt: record.updatedAt,
+          updatedBy: record.updatedBy,
+          version: record.version,
+          attachments: [...record.attachments]
+            .sort(
+              (left, right) =>
+                left.sortOrder - right.sortOrder ||
+                left.createdAt.getTime() - right.createdAt.getTime() ||
+                left.id.localeCompare(right.id),
+            )
+            .map((attachment) => ({
+              id: attachment.id,
+              assetId: attachment.assetId,
+              sectionKey: attachment.sectionKey,
+              caption: attachment.caption,
+              altText: attachment.altText,
+              sortOrder: attachment.sortOrder,
+              createdBy: attachment.createdBy,
+              createdAt: attachment.createdAt,
+              asset: {
+                id: attachment.asset.id,
+                patientId: attachment.asset.patientId,
+                originalName: attachment.asset.originalName,
+                mimeType: attachment.asset.mimeType,
+                sizeBytes: attachment.asset.sizeBytes,
+                width: attachment.asset.width,
+                height: attachment.asset.height,
+                sha256: attachment.asset.sha256,
+                status: attachment.asset.status,
+                expiresAt: attachment.asset.expiresAt,
+                version: attachment.asset.version,
+                createdAt: attachment.asset.createdAt,
+                updatedAt: attachment.asset.updatedAt,
+                contentUrl: buildClinicalMediaContentUrl(
+                  attachment.asset.patientId,
+                  attachment.asset.id,
+                ),
+              },
+            })),
+        })),
+        documents: medicalDocuments.map((document) => {
+          const canExposeClinicalText = document.status === 'VALIDATED';
+          const correctedText = document.correctedText?.trim();
+          const ocrText = document.ocrText?.trim();
+          const clinicalText = canExposeClinicalText ? correctedText || ocrText || null : null;
 
-        return {
-          id: document.id,
-          originalName: document.originalName,
-          clinicalMetadata: (document.clinicalMetadata ?? {}) as DocumentClinicalMetadataDto,
-          metadataRevisions: (document.metadataRevisions ?? []).map((revision) => ({
-            ...revision,
-            metadata: revision.metadata as DocumentClinicalMetadataDto,
-          })),
-          mimeType: document.mimeType,
-          sizeBytes: document.sizeBytes,
-          status: document.status,
-          clinicalText,
-          textSource: clinicalText === null ? 'NONE' : correctedText ? 'CORRECTED' : 'OCR',
-          rejectReason: document.rejectReason,
-          createdAt: document.createdAt,
-          processedAt: document.processedAt,
-          correctedAt: document.correctedAt,
-          correctedById: document.correctedById,
-          reviewedAt: document.reviewedAt,
-          reviewedBy: document.reviewedBy,
-          validationChecklist: document.validationChecklist,
-          validationAttestedAt: document.validationAttestedAt,
-          createdBy: document.createdBy,
-          updatedBy: document.updatedBy,
-        };
-      }),
-      generatedAt: new Date(),
-    };
+          return {
+            id: document.id,
+            originalName: document.originalName,
+            clinicalMetadata: (document.clinicalMetadata ?? {}) as DocumentClinicalMetadataDto,
+            metadataRevisions: (document.metadataRevisions ?? []).map((revision) => ({
+              ...revision,
+              metadata: revision.metadata as DocumentClinicalMetadataDto,
+            })),
+            mimeType: document.mimeType,
+            sizeBytes: document.sizeBytes,
+            status: document.status,
+            clinicalText,
+            textSource: clinicalText === null ? 'NONE' : correctedText ? 'CORRECTED' : 'OCR',
+            rejectReason: document.rejectReason,
+            createdAt: document.createdAt,
+            processedAt: document.processedAt,
+            correctedAt: document.correctedAt,
+            correctedById: document.correctedById,
+            reviewedAt: document.reviewedAt,
+            reviewedBy: document.reviewedBy,
+            validationChecklist: document.validationChecklist,
+            validationAttestedAt: document.validationAttestedAt,
+            createdBy: document.createdBy,
+            updatedBy: document.updatedBy,
+          };
+        }),
+        generatedAt: new Date(),
+      },
+      query,
+    );
 
     this.logger.log(
       JSON.stringify({

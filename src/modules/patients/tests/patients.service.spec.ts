@@ -280,6 +280,7 @@ describe('PatientsService', () => {
       insuranceName: null,
       insuranceNumber: null,
       clinicalSummaryRevisions: [],
+      clinicalEpisodes: [],
       clinicalRecords: [
         {
           id: 'record-1',

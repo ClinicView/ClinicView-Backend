@@ -1,7 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { DocumentType, Sex } from '@prisma/client';
+import { PatientContextDto } from './patient-context.dto';
 
-export class PatientResponseDto {
+export class PatientResponseDto extends PatientContextDto {
+  @ApiProperty()
+  version: number;
   @ApiProperty()
   id: string;
 

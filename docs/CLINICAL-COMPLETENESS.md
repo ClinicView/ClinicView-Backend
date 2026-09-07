@@ -1,0 +1,35 @@
+# Completar los módulos clínicos
+
+## Bloque 1: contexto del paciente e información longitudinal
+
+- Identificación institucional opcional y única; contacto de emergencia,
+  representante y seguro. No se asignan números ni antecedentes ficticios.
+- Edición, activación y desactivación requieren `expectedVersion`; se guarda el
+  actor y se devuelve `409` cuando otra sesión ya modificó al paciente.
+- `GET/PUT /patients/:patientId/clinical-summary`: reconciliación explícita de
+  alergias, problemas y medicación. Desconocido no equivale a ausencia declarada.
+- Lectura: `patients.read` + `records.read`. Escritura: además `records.create`.
+  No se expone contenido clínico a un rol que solo puede consultar filiación.
+- Revisiones append-only con autor, fecha, motivo y payload validado. Las
+  actualizaciones son transaccionales y no admiten pacientes inactivos.
+- `GET .../clinical-summary/history`: páginas de 20 con `beforeVersion`.
+- La exportación completa incluye todas las revisiones (la más reciente primero)
+  dentro de la misma instantánea consistente que los documentos y atenciones.
+- Auditoría operacional registra la acción y el actor, no el contenido clínico.
+
+Aplicar `npm run prisma:migrate:deploy` y regenerar Prisma antes de iniciar esta
+versión. Desplegar coordinadamente con el frontend que envía `expectedVersion`.
+
+## Siguientes bloques del alcance aprobado
+
+1. Metadatos clínicos de documentos, fecha/rango y procedencia; confirmación de carga.
+2. Publicación humana de un documento validado como registro digitalizado enlazado.
+3. Autoría profesional, finalización y episodios; diferenciar atestación de firma
+   digital certificada (esta última requiere una integración real).
+4. Catálogos institucionales y ampliación discriminada de plantillas.
+5. Filtros, paginación completa, indicadores, notificaciones y exportación avanzada.
+6. Seguridad de despliegue: MFA y alcance institucional/paciente. Una publicación
+   real en nube requiere elegir infraestructura y configurar sus credenciales;
+   no queda implícitamente autorizada una contratación ni acreditación legal.
+
+IA fuera del alcance. No se infieren diagnósticos, alergias ni tratamientos.

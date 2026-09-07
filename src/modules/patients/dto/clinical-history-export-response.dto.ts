@@ -8,8 +8,10 @@ import {
   Sex,
 } from '@prisma/client';
 import { ClinicalRecordAttachmentResponseDto } from '../../clinical-records/dto/record-attachment.dto';
+import { PatientContextDto } from './patient-context.dto';
+import { ClinicalSummaryResponseDto } from './clinical-summary.dto';
 
-export class ClinicalHistoryExportPatientDto {
+export class ClinicalHistoryExportPatientDto extends PatientContextDto {
   @ApiProperty() id: string;
   @ApiProperty({ enum: DocumentType }) documentType: DocumentType;
   @ApiProperty() documentNumber: string;
@@ -87,6 +89,11 @@ export class ClinicalHistoryExportDocumentDto {
 }
 
 export class ClinicalHistoryExportResponseDto {
+  @ApiProperty({
+    type: [ClinicalSummaryResponseDto],
+    description: 'Todas las revisiones longitudinales; la primera es la vigente al exportar.',
+  })
+  clinicalSummaryRevisions: ClinicalSummaryResponseDto[];
   @ApiProperty({ type: ClinicalHistoryExportPatientDto })
   patient: ClinicalHistoryExportPatientDto;
 

@@ -17,6 +17,7 @@ export const CLINICAL_E2E_PHI = {
 const CLINICAL_PERMISSIONS = [
   'patients.read',
   'patients.create',
+  'patients.update',
   'records.read',
   'records.create',
   'records.correct',
@@ -160,16 +161,8 @@ export async function createClinicalFlowFixture(
   }
 
   return {
-    clinician: await createUser(
-      clinicianRoleId,
-      'clinical_owner',
-      'E2E-Clinical-Owner-7042!',
-    ),
-    peerClinician: await createUser(
-      clinicianRoleId,
-      'clinical_peer',
-      'E2E-Clinical-Peer-7042!',
-    ),
+    clinician: await createUser(clinicianRoleId, 'clinical_owner', 'E2E-Clinical-Owner-7042!'),
+    peerClinician: await createUser(clinicianRoleId, 'clinical_peer', 'E2E-Clinical-Peer-7042!'),
     reader: await createUser(readerRoleId, 'clinical_reader', 'E2E-Clinical-Reader-7042!'),
     limited: await createUser(limitedRoleId, 'clinical_limited', 'E2E-Clinical-Limited-7042!'),
   };

@@ -162,7 +162,10 @@ describe('Auth, RBAC y auditoría append-only (e2e)', () => {
       headers: jsonHeaders(dashboardAccessToken),
     });
     expect(allowed.response.status).toBe(200);
-    expect(allowed.body.patientsToday).toBe(0);
+    // The clinical suite uses the same isolated schema and may run first.
+    // This test verifies access, not an incidental empty-database count.
+    expect(Number.isInteger(allowed.body.patientsToday)).toBe(true);
+    expect(allowed.body.patientsToday).toBeGreaterThanOrEqual(0);
 
     const denied = await jsonRequest<unknown>(baseUrl, '/api/dashboard/stats', {
       headers: jsonHeaders(limitedAccessToken),

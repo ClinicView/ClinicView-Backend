@@ -6,6 +6,7 @@ import { PatientsController } from '../patients.controller';
 import { PatientsService } from '../patients.service';
 
 const mockPatient: PatientResponseDto = {
+  version: 0,
   id: 'patient-uuid-001',
   documentType: DocumentType.DNI,
   documentNumber: '12345678',
@@ -147,7 +148,11 @@ describe('PatientsController', () => {
   });
 
   it('deactivate devuelve paciente con isActive=false', async () => {
-    const result = await controller.deactivate(mockPatient.id);
+    const result = await controller.deactivate(
+      mockPatient.id,
+      { expectedVersion: 0 },
+      { user: { sub: 'actor-uuid' } },
+    );
     expect(result.isActive).toBe(false);
   });
 });

@@ -12,8 +12,9 @@ import {
   IsUUID,
 } from 'class-validator';
 import { IsPastOrPresentClinicalDate } from '../../../common/validation/clinical-date';
+import { PatientContextDto } from './patient-context.dto';
 
-export class CreatePatientDto {
+export class CreatePatientDto extends PatientContextDto {
   @ApiProperty({ enum: DocumentType, example: DocumentType.DNI })
   @IsEnum(DocumentType)
   documentType: DocumentType;
@@ -53,18 +54,18 @@ export class CreatePatientDto {
   @IsOptional()
   @IsString()
   @MaxLength(20)
-  phone?: string;
+  phone?: string | null;
 
   @ApiProperty({ required: false, example: 'paciente@correo.com' })
   @IsOptional()
   @IsEmail()
-  email?: string;
+  email?: string | null;
 
   @ApiProperty({ required: false, example: 'Av. Principal 123, Lima' })
   @IsOptional()
   @IsString()
   @MaxLength(255)
-  address?: string;
+  address?: string | null;
 
   @ApiPropertyOptional({
     type: String,

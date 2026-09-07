@@ -40,7 +40,7 @@ import {
   PatientRegistrationDraftResponseDto,
   UpsertPatientRegistrationDraftDto,
 } from './dto/patient-registration-draft.dto';
-import { UpdatePatientDto } from './dto/update-patient.dto';
+import { PatientVersionDto, UpdatePatientDto } from './dto/update-patient.dto';
 import { PaginatedResponse, PatientsService } from './patients.service';
 
 interface AuthRequest {
@@ -187,8 +187,9 @@ export class PatientsController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdatePatientDto,
+    @Request() request: AuthRequest,
   ): Promise<PatientResponseDto> {
-    return this.patientsService.update(id, dto);
+    return this.patientsService.update(id, dto, request.user.sub);
   }
 
   @Patch(':id/deactivate')
@@ -202,8 +203,12 @@ export class PatientsController {
   @ApiOperation({ summary: 'Desactivar paciente (borrado lógico)' })
   @ApiResponse({ status: 200, type: PatientResponseDto })
   @ApiNotFoundResponse({ description: 'Paciente no encontrado.' })
-  deactivate(@Param('id', ParseUUIDPipe) id: string): Promise<PatientResponseDto> {
-    return this.patientsService.deactivate(id);
+  deactivate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PatientVersionDto,
+    @Request() request: AuthRequest,
+  ): Promise<PatientResponseDto> {
+    return this.patientsService.deactivate(id, dto.expectedVersion, request.user.sub);
   }
 
   @Patch(':id/activate')
@@ -217,7 +222,11 @@ export class PatientsController {
   @ApiOperation({ summary: 'Reactivar paciente desactivado' })
   @ApiResponse({ status: 200, type: PatientResponseDto })
   @ApiNotFoundResponse({ description: 'Paciente no encontrado.' })
-  activate(@Param('id', ParseUUIDPipe) id: string): Promise<PatientResponseDto> {
-    return this.patientsService.activate(id);
+  activate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PatientVersionDto,
+    @Request() request: AuthRequest,
+  ): Promise<PatientResponseDto> {
+    return this.patientsService.activate(id, dto.expectedVersion, request.user.sub);
   }
 }

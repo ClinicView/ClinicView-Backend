@@ -14,6 +14,14 @@ const clinicalHistoryExportArgs = {
     phone: true,
     email: true,
     address: true,
+    medicalRecordNumber: true,
+    emergencyContactName: true,
+    emergencyContactPhone: true,
+    emergencyContactRelationship: true,
+    representativeName: true,
+    insuranceName: true,
+    insuranceNumber: true,
+    clinicalSummaryRevisions: { orderBy: { version: 'desc' } },
     clinicalRecords: {
       select: {
         id: true,
@@ -275,16 +283,15 @@ export class PatientsRepository {
     });
   }
 
-  async update(id: string, data: Prisma.PatientUpdateInput): Promise<Patient> {
-    return this.prisma.patient.update({ where: { id }, data });
-  }
-
-  async deactivate(id: string): Promise<Patient> {
-    return this.prisma.patient.update({ where: { id }, data: { isActive: false } });
-  }
-
-  async activate(id: string): Promise<Patient> {
-    return this.prisma.patient.update({ where: { id }, data: { isActive: true } });
+  async update(
+    id: string,
+    data: Prisma.PatientUpdateInput,
+    expectedVersion: number,
+  ): Promise<Patient> {
+    return this.prisma.patient.update({
+      where: { id, version: expectedVersion },
+      data: { ...data, version: { increment: 1 } },
+    });
   }
 
   /** Indicadores para el mini-dashboard de la lista de pacientes. */

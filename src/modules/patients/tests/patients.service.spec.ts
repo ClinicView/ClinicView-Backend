@@ -23,6 +23,13 @@ const mockPatient: Patient = {
   phone: null,
   email: null,
   address: null,
+  medicalRecordNumber: null,
+  emergencyContactName: null,
+  emergencyContactPhone: null,
+  emergencyContactRelationship: null,
+  representativeName: null,
+  insuranceName: null,
+  insuranceNumber: null,
   isActive: true,
   createdAt: new Date('2026-01-01'),
   createdBy: null,
@@ -125,7 +132,7 @@ describe('PatientsService', () => {
     it('convierte una carrera P2002 en conflicto genérico sin PII', async () => {
       repo.create.mockRejectedValue({ code: 'P2002' });
       await expect(service.create(dto, 'actor-uuid')).rejects.toThrow(
-        'Ya existe un paciente con ese tipo y número de documento.',
+        'Ya existe un paciente con ese documento o número de historia clínica.',
       );
     });
 
@@ -265,6 +272,14 @@ describe('PatientsService', () => {
       phone: mockPatient.phone,
       email: mockPatient.email,
       address: mockPatient.address,
+      medicalRecordNumber: null,
+      emergencyContactName: null,
+      emergencyContactPhone: null,
+      emergencyContactRelationship: null,
+      representativeName: null,
+      insuranceName: null,
+      insuranceNumber: null,
+      clinicalSummaryRevisions: [],
       clinicalRecords: [
         {
           id: 'record-1',
@@ -480,18 +495,20 @@ describe('PatientsService', () => {
 
   describe('update', () => {
     it('actualiza campos permitidos (no documentType ni documentNumber)', async () => {
-      const dto: UpdatePatientDto = { firstName: 'Ana' };
+      const dto: UpdatePatientDto = { firstName: 'Ana', expectedVersion: 0 };
       repo.findById.mockResolvedValue(mockPatient);
       repo.update.mockResolvedValue({ ...mockPatient, firstName: 'Ana' });
 
-      const result = await service.update(mockPatient.id, dto);
+      const result = await service.update(mockPatient.id, dto, 'actor-uuid');
 
       expect(result.firstName).toBe('Ana');
     });
 
     it('lanza NotFoundException si el paciente no existe', async () => {
       repo.findById.mockResolvedValue(null);
-      await expect(service.update('inexistente', {})).rejects.toThrow(NotFoundException);
+      await expect(
+        service.update('inexistente', { expectedVersion: 0 }, 'actor-uuid'),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -500,15 +517,17 @@ describe('PatientsService', () => {
   describe('deactivate', () => {
     it('desactiva el paciente (soft delete)', async () => {
       repo.findById.mockResolvedValue(mockPatient);
-      repo.deactivate.mockResolvedValue({ ...mockPatient, isActive: false });
+      repo.update.mockResolvedValue({ ...mockPatient, isActive: false });
 
-      const result = await service.deactivate(mockPatient.id);
+      const result = await service.deactivate(mockPatient.id, 0, 'actor-uuid');
       expect(result.isActive).toBe(false);
     });
 
     it('lanza NotFoundException si no existe', async () => {
       repo.findById.mockResolvedValue(null);
-      await expect(service.deactivate('inexistente')).rejects.toThrow(NotFoundException);
+      await expect(service.deactivate('inexistente', 0, 'actor-uuid')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });

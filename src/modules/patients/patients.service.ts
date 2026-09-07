@@ -23,6 +23,8 @@ import {
   UpsertPatientRegistrationDraftDto,
 } from './dto/patient-registration-draft.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
+import { normalizePatientContext } from './dto/patient-context.dto';
+import { ClinicalSummaryPayloadDto } from './dto/clinical-summary.dto';
 import { PatientsRepository } from './repositories/patients.repository';
 
 export interface PaginatedResponse<T> {
@@ -66,6 +68,7 @@ export class PatientsService {
           phone: dto.phone,
           email: dto.email,
           address: dto.address,
+          ...normalizePatientContext(dto),
           createdBy: actorId,
         },
         dto.draftId !== undefined && dto.expectedDraftVersion !== undefined
@@ -80,7 +83,9 @@ export class PatientsService {
       return this.toResponse(patient);
     } catch (error) {
       if (isPrismaErrorCode(error, 'P2002')) {
-        throw new ConflictException('Ya existe un paciente con ese tipo y número de documento.');
+        throw new ConflictException(
+          'Ya existe un paciente con ese documento o número de historia clínica.',
+        );
       }
       if (isPrismaErrorCode(error, 'P2034')) {
         throw new ConflictException(
@@ -192,9 +197,18 @@ export class PatientsService {
     const snapshot = await this.patientsRepository.findClinicalHistoryForExport(id);
     if (!snapshot) throw new NotFoundException('Paciente no encontrado.');
 
-    const { clinicalRecords, medicalDocuments, ...patient } = snapshot;
+    const {
+      clinicalRecords,
+      medicalDocuments,
+      clinicalSummaryRevisions = [],
+      ...patient
+    } = snapshot;
 
     const result: ClinicalHistoryExportResponseDto = {
+      clinicalSummaryRevisions: clinicalSummaryRevisions.map((revision) => ({
+        ...revision,
+        payload: revision.payload as unknown as ClinicalSummaryPayloadDto,
+      })),
       patient: {
         ...patient,
         dateOfBirth: databaseDateToDateOnly(patient.dateOfBirth),
@@ -305,11 +319,15 @@ export class PatientsService {
     return result;
   }
 
-  async update(id: string, dto: UpdatePatientDto): Promise<PatientResponseDto> {
+  async update(id: string, dto: UpdatePatientDto, actorId: string): Promise<PatientResponseDto> {
+    this.requireActor(actorId);
     const existing = await this.patientsRepository.findById(id);
     if (!existing) throw new NotFoundException('Paciente no encontrado.');
 
-    const data: Parameters<typeof this.patientsRepository.update>[1] = {};
+    const data: Parameters<typeof this.patientsRepository.update>[1] = {
+      ...normalizePatientContext(dto),
+      updatedBy: actorId,
+    };
     if (dto.firstName !== undefined) data.firstName = dto.firstName;
     if (dto.lastName !== undefined) data.lastName = dto.lastName;
     if (dto.dateOfBirth !== undefined) {
@@ -320,27 +338,52 @@ export class PatientsService {
     if (dto.email !== undefined) data.email = dto.email;
     if (dto.address !== undefined) data.address = dto.address;
 
-    const patient = await this.patientsRepository.update(id, data);
-    return this.toResponse(patient);
+    return this.updateWithVersion(id, data, dto.expectedVersion);
   }
 
-  async deactivate(id: string): Promise<PatientResponseDto> {
+  async deactivate(
+    id: string,
+    expectedVersion: number,
+    actorId: string,
+  ): Promise<PatientResponseDto> {
+    this.requireActor(actorId);
     const existing = await this.patientsRepository.findById(id);
     if (!existing) throw new NotFoundException('Paciente no encontrado.');
-    const patient = await this.patientsRepository.deactivate(id);
-    return this.toResponse(patient);
+    return this.updateWithVersion(id, { isActive: false, updatedBy: actorId }, expectedVersion);
   }
 
-  async activate(id: string): Promise<PatientResponseDto> {
+  async activate(
+    id: string,
+    expectedVersion: number,
+    actorId: string,
+  ): Promise<PatientResponseDto> {
+    this.requireActor(actorId);
     const existing = await this.patientsRepository.findById(id);
     if (!existing) throw new NotFoundException('Paciente no encontrado.');
-    const patient = await this.patientsRepository.activate(id);
-    return this.toResponse(patient);
+    return this.updateWithVersion(id, { isActive: true, updatedBy: actorId }, expectedVersion);
+  }
+
+  private async updateWithVersion(id: string, data: Prisma.PatientUpdateInput, version: number) {
+    try {
+      return this.toResponse(await this.patientsRepository.update(id, data, version));
+    } catch (error) {
+      if (isPrismaErrorCode(error, 'P2025')) {
+        throw new ConflictException('El paciente cambió en otra sesión. Recarga antes de guardar.');
+      }
+      if (isPrismaErrorCode(error, 'P2002')) {
+        throw new ConflictException(
+          'El número de historia clínica ya está asignado a otro paciente.',
+        );
+      }
+      throw error;
+    }
   }
 
   private toResponse(patient: Patient): PatientResponseDto {
     return {
       id: patient.id,
+      ...normalizePatientContext(patient),
+      version: patient.version,
       documentType: patient.documentType,
       documentNumber: patient.documentNumber,
       firstName: patient.firstName,

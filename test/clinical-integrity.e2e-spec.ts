@@ -544,7 +544,9 @@ describe('Integridad clínica real y aislada (e2e)', () => {
       { method: 'DELETE', headers: jsonHeaders(clinicianToken) },
     );
     expect(deleted.response.status).toBe(204);
-    expect(await prisma.clinicalMediaAsset.findUnique({ where: { id: disposable.body.id } })).toBeNull();
+    expect(
+      await prisma.clinicalMediaAsset.findUnique({ where: { id: disposable.body.id } }),
+    ).toBeNull();
 
     const recordDraft = await jsonRequest<RecordDraftResponse>(
       baseUrl,
@@ -828,9 +830,9 @@ describe('Integridad clínica real y aislada (e2e)', () => {
       },
     );
     expect(staleCorrection.response.status).toBe(409);
-    expect(
-      await prisma.clinicalRecord.count({ where: { parentRecordId: consultation.id } }),
-    ).toBe(1);
+    expect(await prisma.clinicalRecord.count({ where: { parentRecordId: consultation.id } })).toBe(
+      1,
+    );
 
     const voided = await jsonRequest<RecordResponse>(
       baseUrl,
@@ -895,11 +897,7 @@ describe('Integridad clínica real y aislada (e2e)', () => {
 
     let processed = await uploadAndProcessDocument(CLINICAL_E2E_PHI.documentFilename);
     expect(processed.ocrText).toBe(CLINICAL_E2E_PHI.ocrText);
-    expect(iaProcess).toHaveBeenCalledWith(
-      processed.id,
-      expect.any(Buffer),
-      'application/pdf',
-    );
+    expect(iaProcess).toHaveBeenCalledWith(processed.id, expect.any(Buffer), 'application/pdf');
 
     const file = await fetch(
       `${baseUrl}/api/patients/${patientId}/documents/${processed.id}/file`,
@@ -913,7 +911,11 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     expect(Buffer.from(await file.arrayBuffer())).toEqual(VALID_PDF);
 
     const claimed = await claimDocument(processed);
-    processed = { ...processed, assignedReviewerId: fixture.clinician.id, version: claimed.version };
+    processed = {
+      ...processed,
+      assignedReviewerId: fixture.clinician.id,
+      version: claimed.version,
+    };
 
     const correction = await jsonRequest<DocumentResponse>(
       baseUrl,
@@ -967,9 +969,7 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     expect(validated.response.status).toBe(200);
     expect(validated.body.status).toBe(DocumentStatus.VALIDATED);
     expect(validated.body.validationAttested).toBe(true);
-    expect(validated.body.validationChecklist?.items.map(({ id }) => id)).toEqual(
-      CHECKLIST_IDS,
-    );
+    expect(validated.body.validationChecklist?.items.map(({ id }) => id)).toEqual(CHECKLIST_IDS);
 
     let racing = await uploadAndProcessDocument('carrera-validate-reject.pdf');
     const racingClaim = await claimDocument(racing);
@@ -1105,9 +1105,7 @@ describe('Integridad clínica real y aislada (e2e)', () => {
       new Set(Object.values(RecordType)),
     );
 
-    const exportedWithAttachment = exported.body.records.find(
-      ({ id }) => id === consultation.id,
-    );
+    const exportedWithAttachment = exported.body.records.find(({ id }) => id === consultation.id);
     expect(exportedWithAttachment?.attachments).toHaveLength(1);
     expect(exportedWithAttachment?.attachments[0]).toEqual(
       expect.objectContaining({
@@ -1134,13 +1132,122 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     expect(Number.isNaN(Date.parse(exported.body.generatedAt))).toBe(false);
   });
 
+  it('versiona la información longitudinal con RBAC, CAS y exportación de todas las revisiones', async () => {
+    const patient = await prisma.patient.create({
+      data: {
+        documentType: 'OTHER',
+        documentNumber: 'LONGITUDINAL-E2E',
+        firstName: 'Paciente',
+        lastName: 'Longitudinal Demo',
+        dateOfBirth: new Date('1990-01-01'),
+        sex: 'OTHER',
+      },
+    });
+    const path = `/api/patients/${patient.id}/clinical-summary`;
+    const denied = await jsonRequest<unknown>(baseUrl, path, {
+      headers: jsonHeaders(limitedToken),
+    });
+    expect(denied.response.status).toBe(403);
+    const initial = await jsonRequest<{ version: number; payload: { allergyStatus: string } }>(
+      baseUrl,
+      path,
+      { headers: jsonHeaders(readerToken) },
+    );
+    expect(initial.body).toMatchObject({ version: 0, payload: { allergyStatus: 'UNKNOWN' } });
+    const payload = {
+      expectedVersion: 0,
+      reason: CLINICAL_E2E_PHI.recordNotes,
+      allergyStatus: 'NONE_KNOWN',
+      allergies: [],
+      problemStatus: 'UNKNOWN',
+      problems: [],
+      medicationStatus: 'UNKNOWN',
+      medications: [],
+    };
+    const readerWrite = await jsonRequest<unknown>(baseUrl, path, {
+      method: 'PUT',
+      headers: jsonHeaders(readerToken),
+      body: JSON.stringify(payload),
+    });
+    expect(readerWrite.response.status).toBe(403);
+    const race = await Promise.all(
+      [clinicianToken, peerToken].map((token) =>
+        jsonRequest<{ version: number }>(baseUrl, path, {
+          method: 'PUT',
+          headers: jsonHeaders(token),
+          body: JSON.stringify(payload),
+        }),
+      ),
+    );
+    expect(race.map((r) => r.response.status).sort()).toEqual([200, 409]);
+    const second = await jsonRequest<{ version: number; recordedByName: string }>(baseUrl, path, {
+      method: 'PUT',
+      headers: jsonHeaders(clinicianToken),
+      body: JSON.stringify({
+        ...payload,
+        expectedVersion: 1,
+        allergyStatus: 'RECORDED',
+        allergies: [
+          {
+            id: 'd3e0e47b-e88c-4d94-9f70-d8dde534d5ac',
+            name: 'Sustancia demo',
+            reaction: 'Reacción demo',
+            severity: 'MILD',
+          },
+        ],
+      }),
+    });
+    expect(second.response.status).toBe(200);
+    expect(second.body).toMatchObject({
+      version: 2,
+      recordedByName: 'Profesional Sintético clinical_owner',
+    });
+    const exported = await jsonRequest<{
+      clinicalSummaryRevisions: Array<{ version: number; payload: { allergyStatus: string } }>;
+    }>(baseUrl, `/api/patients/${patient.id}/clinical-history/export`, {
+      headers: jsonHeaders(readerToken),
+    });
+    expect(exported.body.clinicalSummaryRevisions.map((r) => r.version)).toEqual([2, 1]);
+    expect(exported.body.clinicalSummaryRevisions[1].payload.allergyStatus).toBe('NONE_KNOWN');
+    const latestPatient = await prisma.patient.findUniqueOrThrow({ where: { id: patient.id } });
+    const editPath = `/api/patients/${patient.id}`;
+    const edits = await Promise.all(
+      [clinicianToken, peerToken].map((token) =>
+        jsonRequest<{ version: number }>(baseUrl, editPath, {
+          method: 'PATCH',
+          headers: jsonHeaders(token),
+          body: JSON.stringify({
+            expectedVersion: latestPatient.version,
+            medicalRecordNumber: 'HC-E2E-001',
+            emergencyContactName: 'Contacto demo',
+          }),
+        }),
+      ),
+    );
+    expect(edits.map((r) => r.response.status).sort()).toEqual([200, 409]);
+    const deactivate = await jsonRequest<unknown>(baseUrl, `${editPath}/deactivate`, {
+      method: 'PATCH',
+      headers: jsonHeaders(clinicianToken),
+      body: JSON.stringify({ expectedVersion: latestPatient.version + 1 }),
+    });
+    expect(deactivate.response.status).toBe(200);
+    const inactiveWrite = await jsonRequest<unknown>(baseUrl, path, {
+      method: 'PUT',
+      headers: jsonHeaders(clinicianToken),
+      body: JSON.stringify({ ...payload, expectedVersion: 2 }),
+    });
+    expect(inactiveWrite.response.status).toBe(400);
+    expect(
+      await prisma.patientClinicalSummaryRevision.count({ where: { patientId: patient.id } }),
+    ).toBe(2);
+  });
+
   it('no persiste PHI de payloads clínicos en la bitácora', async () => {
     const events = await prisma.auditEvent.findMany({ orderBy: { occurredAt: 'asc' } });
     expect(events.length).toBeGreaterThan(0);
     expect(
       events.some(
-        ({ action, outcome }) =>
-          action === 'PATIENT_CREATED' && outcome === AuditOutcome.SUCCESS,
+        ({ action, outcome }) => action === 'PATIENT_CREATED' && outcome === AuditOutcome.SUCCESS,
       ),
     ).toBe(true);
     expect(

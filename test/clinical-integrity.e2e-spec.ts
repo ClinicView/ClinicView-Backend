@@ -1422,6 +1422,33 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     expect((await publish({ ...body, publicationKey: randomUUID(), expectedDocumentVersion: original.version + 1 })).response.status).toBe(409);
   });
 
+  it('confirma una versión con autoría separada y preserva el cierre al corregir', async () => {
+    type Confirmed = RecordResponse & { confirmation: { actorId: string; actorUsername: string; capacity: string; contentHash: string; recordVersion: number } | null };
+    const created = await jsonRequest<Confirmed>(baseUrl, `/api/patients/${patientId}/records`, { method: 'POST', headers: jsonHeaders(clinicianToken), body: JSON.stringify({ recordType: 'CONSULTATION', attendedAt: '2023-09-27', attendancePrecision: 'DAY', summary: CLINICAL_E2E_PHI.recordSummary, details: VALID_RECORD_DETAILS.CONSULTATION, professionalId: fixture.clinician.id }) });
+    expect(created.response.status).toBe(201);
+    const confirm = (payload: object, token = peerToken) => jsonRequest<Confirmed>(baseUrl, `/api/patients/${patientId}/records/${created.body.id}/confirm`, { method: 'POST', headers: jsonHeaders(token), body: JSON.stringify(payload) });
+    const payload = { expectedVersion: created.body.version, attested: true, note: CLINICAL_E2E_PHI.recordNotes };
+    expect((await confirm(payload, readerToken)).response.status).toBe(403);
+    expect((await confirm({ ...payload, attested: false })).response.status).toBe(400);
+    expect((await confirm({ ...payload, expectedVersion: 99 })).response.status).toBe(409);
+    const race = await Promise.all([confirm(payload), confirm(payload)]);
+    expect(race.map((result) => result.response.status).sort()).toEqual([201, 409]);
+    const confirmed = race.find((result) => result.response.status === 201)!.body;
+    expect(confirmed.confirmation).toMatchObject({ actorId: fixture.peerClinician.id, actorUsername: fixture.peerClinician.username, capacity: 'REVIEWER', recordVersion: created.body.version });
+    expect(confirmed.confirmation?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    const row = await prisma.clinicalRecordConfirmation.findUniqueOrThrow({ where: { recordId: created.body.id } });
+    await expect(prisma.clinicalRecordConfirmation.update({ where: { id: row.id }, data: { note: 'Reemplazo indebido' } })).rejects.toThrow();
+    const corrected = await jsonRequest<Confirmed>(baseUrl, `/api/patients/${patientId}/records/${created.body.id}/correct`, { method: 'POST', headers: jsonHeaders(clinicianToken), body: JSON.stringify({ expectedVersion: confirmed.version, summary: 'Nueva versión pendiente de revisión explícita' }) });
+    expect(corrected.response.status).toBe(201);
+    expect(corrected.body.confirmation).toBeNull();
+    expect((await confirm({ ...payload, expectedVersion: confirmed.version + 1 })).response.status).toBe(409);
+    const exported = await jsonRequest<{ records: Confirmed[] }>(baseUrl, `/api/patients/${patientId}/clinical-history/export`, { headers: jsonHeaders(readerToken) });
+    expect(exported.body.records.find((record) => record.id === created.body.id)?.confirmation).toEqual(confirmed.confirmation);
+    const own = await jsonRequest<Confirmed>(baseUrl, `/api/patients/${patientId}/records/${corrected.body.id}/confirm`, { method: 'POST', headers: jsonHeaders(clinicianToken), body: JSON.stringify({ expectedVersion: corrected.body.version, attested: true }) });
+    expect(own.response.status).toBe(201);
+    expect(own.body.confirmation?.capacity).toBe('ORIGINAL_PROFESSIONAL');
+  });
+
   it('no persiste PHI de payloads clínicos en la bitácora', async () => {
     const events = await prisma.auditEvent.findMany({ orderBy: { occurredAt: 'asc' } });
     expect(events.length).toBeGreaterThan(0);

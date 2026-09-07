@@ -38,6 +38,7 @@ const makeResponse = (overrides: Record<string, unknown> = {}) => ({
 
 const mockService = {
   create: jest.fn(),
+  confirm: jest.fn(),
   findByPatient: jest.fn(),
   findOne: jest.fn(),
   correct: jest.fn(),

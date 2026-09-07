@@ -27,3 +27,22 @@ concurrente, reenvío, herencia de cita, inmutabilidad y exportación.
 
 Aplicar prisma:migrate:deploy y regenerar Prisma. Migración aditiva:
 20260907130000_clinical_record_sources. No se ejecuta ni modifica IA.
+
+## Confirmación de una versión
+
+POST records/:id/confirm requiere patients.read, records.read y records.confirm,
+expectedVersion y attested=true; note es opcional. La operación valida la versión
+activa, paciente/actor activos y profesional identificado. Guarda nombre/usuario,
+fecha, versión y huella SHA-256 del contenido en una tabla inmutable. El cierre
+interno no acredita colegiatura ni equivale a firma digital certificada.
+
+La cuenta vinculada al profesional original se identifica como tal; cualquier
+otro confirmante autorizado queda como revisor, sin sustituir al profesional.
+La corrección crea una atención pendiente de confirmar y conserva el cierre
+anterior. La anulación tampoco borra el cierre histórico. La exportación incluye
+ambos estados. No hay confirmaciones retroactivas inventadas para datos existentes.
+
+Migración 20260907140000_record_confirmation: agrega records.confirm a roles base
+clínicos y administrador; los roles personalizados se configuran en Administración.
+Las sesiones deben renovar sus permisos o volver a iniciar sesión. La migración
+también refuerza en BD que la cita y la atención pertenezcan al mismo paciente.

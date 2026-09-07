@@ -11,6 +11,7 @@ import { PrismaService } from '../../../database/prisma.service';
 const withCountArgs = {
   include: {
     source: true,
+    confirmation: true,
     _count: { select: { corrections: true } },
     attachments: {
       include: { asset: true },

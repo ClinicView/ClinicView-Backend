@@ -2,8 +2,10 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { RecordOrigin, RecordStatus, RecordType } from '@prisma/client';
 import { ClinicalRecordAttachmentResponseDto } from './record-attachment.dto';
 import { RecordSourceDto } from './publish-record.dto';
+import { RecordConfirmationDto } from './confirm-record.dto';
 
 export class RecordResponseDto {
+  @ApiPropertyOptional({ type: RecordConfirmationDto, nullable: true }) confirmation: RecordConfirmationDto | null;
   @ApiProperty() id: string;
   @ApiProperty() patientId: string;
   @ApiProperty({ enum: RecordType }) recordType: RecordType;

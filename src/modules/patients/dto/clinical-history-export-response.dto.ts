@@ -10,6 +10,7 @@ import {
 import { ClinicalRecordAttachmentResponseDto } from '../../clinical-records/dto/record-attachment.dto';
 import { PatientContextDto } from './patient-context.dto';
 import { RecordSourceDto } from '../../clinical-records/dto/publish-record.dto';
+import { RecordConfirmationDto } from '../../clinical-records/dto/confirm-record.dto';
 import { ClinicalSummaryResponseDto } from './clinical-summary.dto';
 import {
   DocumentClinicalMetadataDto,
@@ -31,6 +32,7 @@ export class ClinicalHistoryExportPatientDto extends PatientContextDto {
 }
 
 export class ClinicalHistoryExportRecordDto {
+  @ApiPropertyOptional({ type: RecordConfirmationDto, nullable: true }) confirmation: RecordConfirmationDto | null;
   @ApiProperty() id: string;
   @ApiProperty({ enum: RecordType }) recordType: RecordType;
   @ApiProperty({ enum: RecordOrigin }) origin: RecordOrigin;

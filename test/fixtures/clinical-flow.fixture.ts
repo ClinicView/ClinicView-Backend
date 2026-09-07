@@ -21,6 +21,7 @@ const CLINICAL_PERMISSIONS = [
   'records.read',
   'records.create',
   'records.correct',
+  'records.confirm',
   'records.void',
   'documents.read',
   'documents.upload',

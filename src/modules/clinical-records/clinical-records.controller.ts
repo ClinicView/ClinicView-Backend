@@ -26,6 +26,7 @@ import { ClinicalRecordsService } from './clinical-records.service';
 import { CorrectRecordDto } from './dto/correct-record.dto';
 import { CreateRecordDto } from './dto/create-record.dto';
 import { PublishRecordDto } from './dto/publish-record.dto';
+import { ConfirmRecordDto } from './dto/confirm-record.dto';
 import { FindRecordsQueryDto } from './dto/find-records-query.dto';
 import { RecordResponseDto } from './dto/record-response.dto';
 import {
@@ -194,10 +195,6 @@ export class ClinicalRecordsController {
     resourceParam: 'id',
   })
   @RequirePermissions('records.void')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Anular una historia clínica activa' })
-  @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
-  @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, type: RecordResponseDto })
   void(
     @Param('patientId', ParseUUIDPipe) patientId: string,
@@ -206,5 +203,25 @@ export class ClinicalRecordsController {
     @Request() req: AuthRequest,
   ): Promise<RecordResponseDto> {
     return this.service.void(patientId, id, dto, req.user.sub);
+  }
+
+  @Post(':id/confirm')
+  @RequirePermissions('patients.read', 'records.read', 'records.confirm')
+  @Audited(AUDIT_ACTIONS.CLINICAL_RECORD_CONFIRMED, {
+    resourceType: 'CLINICAL_RECORD',
+    patientParam: 'patientId',
+    resourceParam: 'id',
+  })
+  @ApiOperation({
+    summary: 'Confirmar una versión clínica revisada (no firma digital certificada)',
+  })
+  @ApiResponse({ status: 201, type: RecordResponseDto })
+  confirm(
+    @Param('patientId', ParseUUIDPipe) patientId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ConfirmRecordDto,
+    @Request() req: AuthRequest,
+  ) {
+    return this.service.confirm(patientId, id, dto, req.user.sub);
   }
 }

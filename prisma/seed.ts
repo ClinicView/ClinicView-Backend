@@ -79,6 +79,7 @@ const PERMISSIONS = [
     description: 'Emitir correcciones sobre registros clínicos existentes.',
   },
   { key: 'records.void', description: 'Anular registros clínicos (borrado lógico).' },
+  { key: 'records.confirm', description: 'Confirmar y cerrar una versión clínica revisada.' },
 
   // Documentos médicos (módulo medical-documents)
   { key: 'documents.upload', description: 'Subir documentos clínicos para digitalización.' },
@@ -117,6 +118,7 @@ const ROLE_PERMISSIONS: Record<string, PermissionKey[]> = {
   ADMINISTRADOR: ALL_PERMISSION_KEYS,
 
   MEDICO: [
+    'records.confirm',
     'patients.read',
     'patients.create',
     'patients.update',
@@ -134,9 +136,10 @@ const ROLE_PERMISSIONS: Record<string, PermissionKey[]> = {
     'review.assign',
   ],
 
-  FARMACEUTICO: ['patients.read', 'records.read', 'documents.read', 'entities.read'],
+  FARMACEUTICO: ['patients.read', 'records.read', 'records.confirm', 'documents.read', 'entities.read'],
 
   LABORATORISTA: [
+    'records.confirm',
     'patients.read',
     'records.read',
     'records.create',
@@ -148,6 +151,7 @@ const ROLE_PERMISSIONS: Record<string, PermissionKey[]> = {
   ],
 
   TERAPEUTA: [
+    'records.confirm',
     'patients.read',
     'records.read',
     'records.create',

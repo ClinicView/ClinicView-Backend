@@ -354,6 +354,7 @@ model ClinicalRecord {
   corrections  ClinicalRecord[]           @relation("CorrectionChain")
   attachments  ClinicalRecordAttachment[]
   source ClinicalRecordSource?
+  confirmation ClinicalRecordConfirmation?
 
   @@index([patientId, attendedAt(sort: Desc)])
   @@index([patientId, status])
@@ -518,4 +519,19 @@ model ClinicalRecordSource {
   document MedicalDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
   @@index([documentId])
   @@map("clinical_record_sources")
+}
+
+model ClinicalRecordConfirmation {
+  id String @id @default(uuid()) @db.Uuid
+  recordId String @unique @map("record_id") @db.Uuid
+  recordVersion Int @map("record_version")
+  actorId String @map("actor_id") @db.Uuid
+  actorName String @map("actor_name")
+  actorUsername String @map("actor_username")
+  capacity String
+  note String? @db.VarChar(2000)
+  contentHash String @map("content_hash") @db.Char(64)
+  confirmedAt DateTime @default(now()) @map("confirmed_at") @db.Timestamptz(3)
+  record ClinicalRecord @relation(fields: [recordId], references: [id], onDelete: Restrict)
+  @@map("clinical_record_confirmations")
 }

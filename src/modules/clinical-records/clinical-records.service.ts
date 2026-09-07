@@ -32,6 +32,8 @@ import { VoidRecordDto } from './dto/void-record.dto';
 import { PublishRecordDto } from './dto/publish-record.dto';
 import { recordAttendance } from './dto/record-attendance';
 import { recordSourceResponse } from './record-source';
+import { ConfirmRecordDto } from './dto/confirm-record.dto';
+import { clinicalContentHash, recordConfirmationResponse } from './record-confirmation';
 import {
   ClinicalRecordsRepository,
   RecordWithCount,
@@ -417,6 +419,67 @@ export class ClinicalRecordsService {
     return this.toResponse(voided);
   }
 
+  async confirm(
+    patientId: string,
+    id: string,
+    dto: ConfirmRecordDto,
+    actorId: string,
+  ): Promise<RecordResponseDto> {
+    this.requireActor(actorId);
+    if (dto.attested !== true) throw new BadRequestException('Confirma la revisión del contenido.');
+    return this.prisma
+      .$transaction(
+        async (tx) => {
+          await this.requireActivePatient(patientId, tx);
+          const record = await this.repo.findByIdAndPatient(id, patientId, tx);
+          if (!record) throw new NotFoundException('Atención no encontrada.');
+          if (
+            record.status !== 'ACTIVE' ||
+            record.confirmation ||
+            record.version !== dto.expectedVersion
+          )
+            throw new ConflictException(
+              'La versión cambió, ya fue confirmada o no está activa. Recarga antes de continuar.',
+            );
+          if (!(record.professionalNameSnapshot || record.doctorName)?.trim())
+            throw new BadRequestException(
+              'Registra el profesional original mediante una corrección antes de confirmar.',
+            );
+          this.normalizeDetails(record.recordType, record.details);
+          const actor = await tx.user.findUnique({
+            where: { id: actorId },
+            select: { isActive: true, fullName: true, username: true },
+          });
+          if (!actor?.isActive)
+            throw new UnauthorizedException('El confirmante debe estar activo.');
+          const changed = await tx.clinicalRecord.updateMany({
+            where: { id, patientId, status: 'ACTIVE', version: dto.expectedVersion },
+            data: { version: { increment: 1 }, updatedBy: actorId },
+          });
+          if (changed.count !== 1)
+            throw new ConflictException('La atención cambió durante la revisión.');
+          await tx.clinicalRecordConfirmation.create({
+            data: {
+              recordId: id,
+              recordVersion: record.version,
+              actorId,
+              actorName: actor.fullName || actor.username,
+              actorUsername: actor.username,
+              capacity: record.professionalId === actorId ? 'ORIGINAL_PROFESSIONAL' : 'REVIEWER',
+              note: optionalText(dto.note),
+              contentHash: clinicalContentHash(record),
+            },
+          });
+          const hydrated = await this.repo.findByIdAndPatient(id, patientId, tx);
+          if (!hydrated)
+            throw new ConflictException('No se pudo recuperar la atención confirmada.');
+          return this.toResponse(hydrated);
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      )
+      .catch((error: unknown) => this.clinicalConflict(error));
+  }
+
   async getCurrentDraft(
     patientId: string,
     actorId: string,
@@ -682,6 +745,7 @@ export class ClinicalRecordsService {
       attendancePrecision: record.attendancePrecision ?? 'INSTANT',
       createdByNameSnapshot: record.createdByNameSnapshot ?? null,
       source: recordSourceResponse(record.source),
+      confirmation: recordConfirmationResponse(record.confirmation),
       summary: record.summary,
       notes: record.notes,
       details: asInputJsonObject(record.details) as Record<string, unknown>,

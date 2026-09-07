@@ -290,6 +290,7 @@ describe('PatientsService', () => {
           attendancePrecision: 'INSTANT',
           createdByNameSnapshot: null,
           source: null,
+          confirmation: null,
           summary: 'Consulta original',
           notes: 'Nota clínica',
           details: { chiefComplaint: 'Dolor torácico' },

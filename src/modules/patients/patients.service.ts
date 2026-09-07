@@ -1,4 +1,5 @@
 import { recordSourceResponse } from '../clinical-records/record-source';
+import { recordConfirmationResponse } from '../clinical-records/record-confirmation';
 import {
   BadRequestException,
   ConflictException,
@@ -224,6 +225,7 @@ export class PatientsService {
         attendancePrecision: record.attendancePrecision ?? 'INSTANT',
         createdByNameSnapshot: record.createdByNameSnapshot ?? null,
         source: recordSourceResponse(record.source),
+        confirmation: recordConfirmationResponse(record.confirmation),
         summary: record.summary,
         notes: record.notes,
         details: record.details as Record<string, unknown>,

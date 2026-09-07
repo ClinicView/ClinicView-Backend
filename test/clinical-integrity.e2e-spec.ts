@@ -856,6 +856,45 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     expect(staleVoid.response.status).toBe(409);
   });
 
+  it('pagina todos los estados sin ocultar correcciones ni anulaciones', async () => {
+    type Page = { data: RecordResponse[]; total: number; page: number; limit: number };
+    const all = await jsonRequest<Page>(
+      baseUrl,
+      `/api/patients/${patientId}/records?status=ALL&limit=50`,
+      { headers: jsonHeaders(clinicianToken) },
+    );
+    expect(all.response.status).toBe(200);
+    expect(all.body.total).toBe(await prisma.clinicalRecord.count({ where: { patientId } }));
+    expect(all.body.data.some((record) => record.status === RecordStatus.CORRECTED)).toBe(true);
+    expect(all.body.data.some((record) => record.status === RecordStatus.VOIDED)).toBe(true);
+    const first = await jsonRequest<Page>(
+      baseUrl,
+      `/api/patients/${patientId}/records?status=ALL&limit=1&page=1`,
+      { headers: jsonHeaders(clinicianToken) },
+    );
+    const second = await jsonRequest<Page>(
+      baseUrl,
+      `/api/patients/${patientId}/records?status=ALL&limit=1&page=2`,
+      { headers: jsonHeaders(clinicianToken) },
+    );
+    expect(first.response.status).toBe(200);
+    expect(second.response.status).toBe(200);
+    expect(first.body.data[0].id).toBe(all.body.data[0].id);
+    expect(second.body.data[0].id).toBe(all.body.data[1].id);
+    expect(first.body.total).toBe(second.body.total);
+    const active = await jsonRequest<Page>(baseUrl, `/api/patients/${patientId}/records?limit=50`, {
+      headers: jsonHeaders(clinicianToken),
+    });
+    expect(active.response.status).toBe(200);
+    expect(active.body.data.every((record) => record.status === RecordStatus.ACTIVE)).toBe(true);
+    const invalid = await jsonRequest<unknown>(
+      baseUrl,
+      `/api/patients/${patientId}/records?status=INVALID`,
+      { headers: jsonHeaders(clinicianToken) },
+    );
+    expect(invalid.response.status).toBe(400);
+  });
+
   it('valida MIME real, procesa sin IA externa y resuelve carreras de revisión', async () => {
     const forbiddenBefore = await prisma.medicalDocument.count({ where: { patientId } });
     const forbidden = await uploadMultipart<unknown>(

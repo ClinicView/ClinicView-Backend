@@ -85,7 +85,7 @@ export class MedicalDocumentsRepository {
     const [documents, total] = await this.prisma.$transaction([
       this.prisma.medicalDocument.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: filters.limit,
         ...medicalDocumentWithAssigneeArgs,

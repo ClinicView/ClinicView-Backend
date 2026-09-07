@@ -34,6 +34,20 @@ versión. Desplegar coordinadamente con el frontend que envía `expectedVersion`
 
 IA fuera del alcance. No se infieren diagnósticos, alergias ni tratamientos.
 
+## Navegación del historial
+
+`GET /patients/:patientId/records?status=ALL` incluye activos, corregidos y anulados.
+Omitir `status` conserva el contrato anterior (solo activos). Antes, la opción
+«Todos los estados» del frontend omitía el filtro y no mostraba realmente todos.
+El orden de páginas de registros y documentos incorpora `id` como desempate de
+fechas iguales. Se mantienen permisos, límites y aislamiento por paciente.
+
+La ficha permite cargar páginas sucesivas, informa cobertura parcial y ofrece
+filtros locales explícitos. Esto no convierte la consulta paginada en una
+instantánea: ante cambios concurrentes se puede recargar. La exportación completa
+conserva su transacción de instantánea independiente. La búsqueda global de todo
+el contenido y los demás elementos del bloque 5 siguen pendientes.
+
 ## Bloque 2: fechas clínicas y procedencia documental
 
 La carga admite tipo documental, fecha civil o período, institución, servicio,

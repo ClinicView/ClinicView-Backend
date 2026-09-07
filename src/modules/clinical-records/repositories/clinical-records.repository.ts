@@ -22,7 +22,7 @@ export type RecordWithCount = Prisma.ClinicalRecordGetPayload<typeof withCountAr
 
 export interface FindRecordsFilters {
   recordType?: RecordType;
-  status?: RecordStatus;
+  status?: RecordStatus | 'ALL';
   origin?: RecordOrigin;
   from?: Date;
   to?: Date;
@@ -46,7 +46,7 @@ export class ClinicalRecordsRepository {
     const where: Prisma.ClinicalRecordWhereInput = {
       patientId,
       ...(filters.recordType && { recordType: filters.recordType }),
-      ...(filters.status ? { status: filters.status } : { status: RecordStatus.ACTIVE }),
+      ...(filters.status === 'ALL' ? {} : { status: filters.status ?? RecordStatus.ACTIVE }),
       ...(filters.origin && { origin: filters.origin }),
       ...(filters.from || filters.to
         ? {
@@ -63,7 +63,7 @@ export class ClinicalRecordsRepository {
     const [records, total] = await this.prisma.$transaction([
       this.prisma.clinicalRecord.findMany({
         where,
-        orderBy: { attendedAt: 'desc' },
+        orderBy: [{ attendedAt: 'desc' }, { id: 'desc' }],
         skip,
         take: filters.limit,
         ...withCountArgs,

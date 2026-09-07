@@ -1,12 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import {
-  IsEnum,
-  IsInt,
-  IsOptional,
-  Max,
-  Min,
-} from 'class-validator';
+import { IsEnum, IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { RecordOrigin, RecordStatus, RecordType } from '@prisma/client';
 import { IsClinicalDateFilter } from '../../../common/validation/clinical-date';
 
@@ -16,10 +10,13 @@ export class FindRecordsQueryDto {
   @IsEnum(RecordType)
   recordType?: RecordType;
 
-  @ApiPropertyOptional({ enum: RecordStatus, default: RecordStatus.ACTIVE })
+  @ApiPropertyOptional({
+    enum: [...Object.values(RecordStatus), 'ALL'],
+    default: RecordStatus.ACTIVE,
+  })
   @IsOptional()
-  @IsEnum(RecordStatus)
-  status?: RecordStatus;
+  @IsIn([...Object.values(RecordStatus), 'ALL'])
+  status?: RecordStatus | 'ALL';
 
   @ApiPropertyOptional({ enum: RecordOrigin })
   @IsOptional()

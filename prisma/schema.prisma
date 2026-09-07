@@ -261,6 +261,7 @@ model Patient {
   version        Int          @default(0)
 
   clinicalRecords      ClinicalRecord[]
+  clinicalEpisodes ClinicalEpisode[]
   clinicalRecordDrafts ClinicalRecordDraft[]
   clinicalMediaAssets  ClinicalMediaAsset[]
   medicalDocuments     MedicalDocument[]
@@ -355,10 +356,13 @@ model ClinicalRecord {
   attachments  ClinicalRecordAttachment[]
   source ClinicalRecordSource?
   confirmation ClinicalRecordConfirmation?
+  episodeId String? @map("episode_id") @db.Uuid
+  episode ClinicalEpisode? @relation(fields: [episodeId], references: [id], onDelete: Restrict)
 
   @@index([patientId, attendedAt(sort: Desc)])
   @@index([patientId, status])
   @@index([professionalId])
+  @@index([episodeId, status])
   @@map("clinical_records")
 }
 
@@ -534,4 +538,37 @@ model ClinicalRecordConfirmation {
   confirmedAt DateTime @default(now()) @map("confirmed_at") @db.Timestamptz(3)
   record ClinicalRecord @relation(fields: [recordId], references: [id], onDelete: Restrict)
   @@map("clinical_record_confirmations")
+}
+
+model ClinicalEpisode {
+  id String @id @default(uuid()) @db.Uuid
+  patientId String @map("patient_id") @db.Uuid
+  title String @db.VarChar(180)
+  description String? @db.VarChar(2000)
+  startedOn DateTime @map("started_on") @db.Date
+  endedOn DateTime? @map("ended_on") @db.Date
+  status String @default("OPEN")
+  version Int @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  records ClinicalRecord[]
+  events ClinicalEpisodeEvent[]
+  @@index([patientId, startedOn(sort: Desc), id])
+  @@map("clinical_episodes")
+}
+
+model ClinicalEpisodeEvent {
+  id String @id @default(uuid()) @db.Uuid
+  episodeId String @map("episode_id") @db.Uuid
+  recordId String? @map("record_id") @db.Uuid
+  action String
+  actorId String @map("actor_id") @db.Uuid
+  actorName String @map("actor_name")
+  reason String @db.VarChar(2000)
+  payload Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  episode ClinicalEpisode @relation(fields: [episodeId], references: [id], onDelete: Restrict)
+  @@index([episodeId, createdAt(sort: Desc), id])
+  @@map("clinical_episode_events")
 }

@@ -34,6 +34,7 @@ import { recordAttendance } from './dto/record-attendance';
 import { recordSourceResponse } from './record-source';
 import { ConfirmRecordDto } from './dto/confirm-record.dto';
 import { clinicalContentHash, recordConfirmationResponse } from './record-confirmation';
+import { episodeResponse, traceEpisodeRecordChange } from '../clinical-episodes/episode-state';
 import {
   ClinicalRecordsRepository,
   RecordWithCount,
@@ -236,6 +237,7 @@ export class ClinicalRecordsService {
 
     const { records, total } = await this.repo.findByPatient(patientId, {
       recordType: query.recordType,
+      episodeId: query.episodeId,
       sourceDocumentId: query.sourceDocumentId,
       status: query.status,
       origin: query.origin,
@@ -263,115 +265,141 @@ export class ClinicalRecordsService {
   ): Promise<RecordResponseDto> {
     this.requireActor(actorId);
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      const original = await this.repo.findByIdAndPatient(id, patientId, tx);
-      if (!original) throw new NotFoundException('Historia clínica no encontrada.');
-      if (original.status !== RecordStatus.ACTIVE) {
-        throw new ConflictException(
-          `No se puede corregir un registro con estado ${original.status}.`,
-        );
-      }
-      if (original.version !== dto.expectedVersion) {
-        throw new ConflictException(
-          'El registro cambió desde que fue abierto. Recarga la información antes de corregirlo.',
-        );
-      }
+    const result = await this.prisma
+      .$transaction(async (tx) => {
+        const original = await this.repo.findByIdAndPatient(id, patientId, tx);
+        if (!original) throw new NotFoundException('Historia clínica no encontrada.');
+        if (original.status !== RecordStatus.ACTIVE) {
+          throw new ConflictException(
+            `No se puede corregir un registro con estado ${original.status}.`,
+          );
+        }
+        if (original.version !== dto.expectedVersion) {
+          throw new ConflictException(
+            'El registro cambió desde que fue abierto. Recarga la información antes de corregirlo.',
+          );
+        }
 
-      const recordType = dto.recordType ?? original.recordType;
-      if (dto.recordType && dto.recordType !== original.recordType && dto.details === undefined) {
-        throw new BadRequestException(
-          'details es obligatorio cuando una corrección cambia recordType.',
-        );
-      }
-      const details =
-        dto.details === undefined
-          ? asInputJsonObject(original.details)
-          : this.normalizeDetails(recordType, dto.details);
-      const schemaVersion = dto.schemaVersion ?? original.schemaVersion;
-      if (schemaVersion !== CLINICAL_RECORD_SCHEMA_VERSION) {
-        throw new BadRequestException(`schemaVersion ${schemaVersion} no está soportada.`);
-      }
+        const recordType = dto.recordType ?? original.recordType;
+        if (dto.recordType && dto.recordType !== original.recordType && dto.details === undefined) {
+          throw new BadRequestException(
+            'details es obligatorio cuando una corrección cambia recordType.',
+          );
+        }
+        const details =
+          dto.details === undefined
+            ? asInputJsonObject(original.details)
+            : this.normalizeDetails(recordType, dto.details);
+        const schemaVersion = dto.schemaVersion ?? original.schemaVersion;
+        if (schemaVersion !== CLINICAL_RECORD_SCHEMA_VERSION) {
+          throw new BadRequestException(`schemaVersion ${schemaVersion} no está soportada.`);
+        }
 
-      const professional = await this.resolveCorrectedProfessional(original, dto, tx);
-      if (dto.attendancePrecision && !dto.attendedAt)
-        throw new BadRequestException('Envía la fecha junto con un cambio de precisión.');
-      const actor = await tx.user.findUnique({
-        where: { id: actorId },
-        select: { isActive: true, fullName: true, username: true },
-      });
-      if (!actor?.isActive) throw new UnauthorizedException('El usuario debe estar activo.');
-      const marked = await this.repo.markCorrected(id, patientId, dto.expectedVersion, actorId, tx);
-      if (!marked) {
-        throw new ConflictException(
-          'El registro fue modificado por otro usuario. La corrección no se guardó.',
-        );
-      }
-
-      const created = await this.repo.createInTransaction(
-        {
+        const professional = await this.resolveCorrectedProfessional(original, dto, tx);
+        if (dto.attendancePrecision && !dto.attendedAt)
+          throw new BadRequestException('Envía la fecha junto con un cambio de precisión.');
+        const actor = await tx.user.findUnique({
+          where: { id: actorId },
+          select: { isActive: true, fullName: true, username: true },
+        });
+        if (!actor?.isActive) throw new UnauthorizedException('El usuario debe estar activo.');
+        const marked = await this.repo.markCorrected(
+          id,
           patientId,
-          recordType,
-          // Una corrección conserva la procedencia de la entrada original.
-          origin: original.origin,
-          attendedAt: dto.attendedAt
+          dto.expectedVersion,
+          actorId,
+          tx,
+        );
+        await traceEpisodeRecordChange(
+          tx,
+          patientId,
+          original.episodeId,
+          id,
+          actorId,
+          'CORRECT',
+          dto.attendedAt
             ? recordAttendance(
                 dto.attendedAt,
-                dto.attendancePrecision ?? original.attendancePrecision ?? 'INSTANT',
+                dto.attendancePrecision ?? original.attendancePrecision,
               )
             : original.attendedAt,
-          attendancePrecision: dto.attendancePrecision ?? original.attendancePrecision ?? 'INSTANT',
-          createdByNameSnapshot: actor.fullName || actor.username,
-          summary: hasOwn(dto, 'summary') ? requiredText(dto.summary, 'summary') : original.summary,
-          notes: hasOwn(dto, 'notes') ? optionalText(dto.notes) : original.notes,
-          details,
-          schemaVersion,
-          ...professional,
-          service: hasOwn(dto, 'service') ? optionalText(dto.service) : original.service,
-          preliminaryDiagnosis: hasOwn(dto, 'preliminaryDiagnosis')
-            ? optionalText(dto.preliminaryDiagnosis)
-            : original.preliminaryDiagnosis,
-          plan: hasOwn(dto, 'plan') ? optionalText(dto.plan) : original.plan,
-          priority: dto.priority ?? original.priority,
-          parentRecordId: id,
-          createdBy: actorId,
-        },
-        tx,
-      );
+        );
+        if (!marked) {
+          throw new ConflictException(
+            'El registro fue modificado por otro usuario. La corrección no se guardó.',
+          );
+        }
 
-      const reusableAssetIds = new Set(
-        original.attachments.map((attachment) => attachment.assetId),
-      );
-      if (original.source) {
-        const citation = recordSourceResponse(original.source)!;
-        await tx.clinicalRecordSource.create({
-          data: {
-            ...citation,
-            documentMetadata: citation.documentMetadata as Prisma.InputJsonObject,
-            recordId: created.id,
+        const created = await this.repo.createInTransaction(
+          {
+            patientId,
+            recordType,
+            // Una corrección conserva la procedencia de la entrada original.
+            origin: original.origin,
+            attendedAt: dto.attendedAt
+              ? recordAttendance(
+                  dto.attendedAt,
+                  dto.attendancePrecision ?? original.attendancePrecision ?? 'INSTANT',
+                )
+              : original.attendedAt,
+            attendancePrecision:
+              dto.attendancePrecision ?? original.attendancePrecision ?? 'INSTANT',
+            createdByNameSnapshot: actor.fullName || actor.username,
+            summary: hasOwn(dto, 'summary')
+              ? requiredText(dto.summary, 'summary')
+              : original.summary,
+            notes: hasOwn(dto, 'notes') ? optionalText(dto.notes) : original.notes,
+            details,
+            schemaVersion,
+            ...professional,
+            service: hasOwn(dto, 'service') ? optionalText(dto.service) : original.service,
+            preliminaryDiagnosis: hasOwn(dto, 'preliminaryDiagnosis')
+              ? optionalText(dto.preliminaryDiagnosis)
+              : original.preliminaryDiagnosis,
+            plan: hasOwn(dto, 'plan') ? optionalText(dto.plan) : original.plan,
+            priority: dto.priority ?? original.priority,
+            parentRecordId: id,
+            episodeId: original.episodeId ?? null,
+            createdBy: actorId,
           },
-        });
-      }
-      const requestedAttachments =
-        dto.attachments ??
-        original.attachments.map((attachment) => ({
-          assetId: attachment.assetId,
-          sectionKey: attachment.sectionKey,
-          caption: attachment.caption,
-          altText: attachment.altText,
-          sortOrder: attachment.sortOrder,
-        }));
-      const bound = await this.media.bindAttachments(
-        patientId,
-        created.id,
-        actorId,
-        requestedAttachments,
-        reusableAssetIds,
-        tx,
-      );
-      const hydrated = await this.repo.findByIdAndPatient(created.id, patientId, tx);
-      if (!hydrated) throw new ConflictException('No se pudo recuperar el registro corregido.');
-      return { record: hydrated, bound };
-    });
+          tx,
+        );
+
+        const reusableAssetIds = new Set(
+          original.attachments.map((attachment) => attachment.assetId),
+        );
+        if (original.source) {
+          const citation = recordSourceResponse(original.source)!;
+          await tx.clinicalRecordSource.create({
+            data: {
+              ...citation,
+              documentMetadata: citation.documentMetadata as Prisma.InputJsonObject,
+              recordId: created.id,
+            },
+          });
+        }
+        const requestedAttachments =
+          dto.attachments ??
+          original.attachments.map((attachment) => ({
+            assetId: attachment.assetId,
+            sectionKey: attachment.sectionKey,
+            caption: attachment.caption,
+            altText: attachment.altText,
+            sortOrder: attachment.sortOrder,
+          }));
+        const bound = await this.media.bindAttachments(
+          patientId,
+          created.id,
+          actorId,
+          requestedAttachments,
+          reusableAssetIds,
+          tx,
+        );
+        const hydrated = await this.repo.findByIdAndPatient(created.id, patientId, tx);
+        if (!hydrated) throw new ConflictException('No se pudo recuperar el registro corregido.');
+        return { record: hydrated, bound };
+      })
+      .catch((error: unknown) => this.clinicalConflict(error));
 
     this.media.logBoundAttachments(actorId, patientId, result.record.id, result.bound);
     return this.toResponse(result.record);
@@ -385,36 +413,41 @@ export class ClinicalRecordsService {
   ): Promise<RecordResponseDto> {
     this.requireActor(actorId);
 
-    const voided = await this.prisma.$transaction(async (tx) => {
-      const record = await this.repo.findByIdAndPatient(id, patientId, tx);
-      if (!record) throw new NotFoundException('Historia clínica no encontrada.');
-      if (record.status !== RecordStatus.ACTIVE) {
-        throw new ConflictException(`No se puede anular un registro con estado ${record.status}.`);
-      }
-      if (record.version !== dto.expectedVersion) {
-        throw new ConflictException(
-          'El registro cambió desde que fue abierto. Recarga la información antes de anularlo.',
-        );
-      }
+    const voided = await this.prisma
+      .$transaction(async (tx) => {
+        const record = await this.repo.findByIdAndPatient(id, patientId, tx);
+        if (!record) throw new NotFoundException('Historia clínica no encontrada.');
+        if (record.status !== RecordStatus.ACTIVE) {
+          throw new ConflictException(
+            `No se puede anular un registro con estado ${record.status}.`,
+          );
+        }
+        if (record.version !== dto.expectedVersion) {
+          throw new ConflictException(
+            'El registro cambió desde que fue abierto. Recarga la información antes de anularlo.',
+          );
+        }
 
-      const marked = await this.repo.markVoided(
-        id,
-        patientId,
-        dto.expectedVersion,
-        requiredText(dto.reason, 'reason'),
-        actorId,
-        tx,
-      );
-      if (!marked) {
-        throw new ConflictException(
-          'El registro fue modificado por otro usuario. La anulación no se guardó.',
+        const marked = await this.repo.markVoided(
+          id,
+          patientId,
+          dto.expectedVersion,
+          requiredText(dto.reason, 'reason'),
+          actorId,
+          tx,
         );
-      }
+        if (!marked) {
+          throw new ConflictException(
+            'El registro fue modificado por otro usuario. La anulación no se guardó.',
+          );
+        }
 
+      await traceEpisodeRecordChange(tx, patientId, record.episodeId, id, actorId, 'VOID');
       const updated = await this.repo.findByIdAndPatient(id, patientId, tx);
-      if (!updated) throw new NotFoundException('Historia clínica no encontrada.');
-      return updated;
-    });
+        if (!updated) throw new NotFoundException('Historia clínica no encontrada.');
+        return updated;
+      })
+      .catch((error: unknown) => this.clinicalConflict(error));
 
     return this.toResponse(voided);
   }
@@ -746,6 +779,7 @@ export class ClinicalRecordsService {
       createdByNameSnapshot: record.createdByNameSnapshot ?? null,
       source: recordSourceResponse(record.source),
       confirmation: recordConfirmationResponse(record.confirmation),
+      episode: episodeResponse(record.episode),
       summary: record.summary,
       notes: record.notes,
       details: asInputJsonObject(record.details) as Record<string, unknown>,

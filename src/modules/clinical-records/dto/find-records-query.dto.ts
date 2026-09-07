@@ -5,6 +5,7 @@ import { RecordOrigin, RecordStatus, RecordType } from '@prisma/client';
 import { IsClinicalDateFilter } from '../../../common/validation/clinical-date';
 
 export class FindRecordsQueryDto {
+  @ApiPropertyOptional({ format: 'uuid' }) @IsOptional() @IsUUID() episodeId?: string;
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
   @IsUUID()

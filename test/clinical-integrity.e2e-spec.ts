@@ -1449,6 +1449,50 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     expect(own.body.confirmation?.capacity).toBe('ORIGINAL_PROFESSIONAL');
   });
 
+  it('agrupa atenciones sin fusionarlas, exige confirmación para cerrar y conserva reaperturas', async () => {
+    type Episode = { id: string; version: number; status: string; activeCount: number; pendingConfirmationCount: number };
+    const endpoint = `/api/patients/${patientId}/episodes`;
+    const requestEpisode = (path: string, method: string, body: object, token = clinicianToken) => jsonRequest<Episode>(baseUrl, path, { method, headers: jsonHeaders(token), body: JSON.stringify(body) });
+    const body = { title: 'Seguimiento sintético E2E', startedOn: '2023-01-01', reason: 'Agrupar atenciones sintéticas relacionadas' };
+    expect((await requestEpisode(endpoint, 'POST', body, readerToken)).response.status).toBe(403);
+    expect((await requestEpisode(endpoint, 'POST', { ...body, startedOn: '2023-02-30' })).response.status).toBe(400);
+    const created = await requestEpisode(endpoint, 'POST', body);
+    expect(created.response.status).toBe(201);
+    const id = created.body.id;
+    const transition = (version: number, action = 'CLOSE') => requestEpisode(`${endpoint}/${id}/transition`, 'POST', { expectedVersion: version, action, ...(action === 'CLOSE' ? { endedOn: '2023-09-27' } : {}), attested: true, reason: 'Cambio de estado revisado de prueba' });
+    expect((await transition(0)).response.status).toBe(409);
+    const record = await jsonRequest<RecordResponse>(baseUrl, `/api/patients/${patientId}/records`, { method: 'POST', headers: jsonHeaders(clinicianToken), body: JSON.stringify({ recordType: 'CONSULTATION', attendedAt: '2023-09-27', attendancePrecision: 'DAY', summary: CLINICAL_E2E_PHI.recordSummary, details: VALID_RECORD_DETAILS.CONSULTATION, professionalId: fixture.clinician.id }) });
+    expect(record.response.status).toBe(201);
+    const assignPath = `/api/patients/${patientId}/records/${record.body.id}/episode`;
+    const assign = (episodeId: string | null, version: number) => requestEpisode(assignPath, 'PATCH', { episodeId, expectedRecordVersion: version, reason: 'Atención vinculada por seguimiento revisado' });
+    expect((await assign(randomUUID(), 0)).response.status).toBe(404);
+    expect((await assign(id, 0)).response.status).toBe(200);
+    expect((await transition(1)).response.status).toBe(409);
+    const confirmed = await jsonRequest<RecordResponse>(baseUrl, `/api/patients/${patientId}/records/${record.body.id}/confirm`, { method: 'POST', headers: jsonHeaders(clinicianToken), body: JSON.stringify({ expectedVersion: 1, attested: true }) });
+    expect(confirmed.response.status).toBe(201);
+    const closed = await transition(1);
+    expect(closed.response.status).toBe(201);
+    expect(closed.body.status).toBe('CLOSED');
+    expect((await assign(null, confirmed.body.version)).response.status).toBe(409);
+    const correctionPath = `/api/patients/${patientId}/records/${record.body.id}/correct`;
+    expect((await requestEpisode(correctionPath, 'POST', { expectedVersion: confirmed.body.version, summary: 'Corrección bloqueada por cierre' })).response.status).toBe(409);
+    expect((await requestEpisode(`/api/patients/${patientId}/records/${record.body.id}/void`, 'PATCH', { expectedVersion: confirmed.body.version, reason: 'Anulación bloqueada por cierre' })).response.status).toBe(409);
+    expect((await prisma.clinicalRecord.findUniqueOrThrow({ where: { id: record.body.id } })).status).toBe('ACTIVE');
+    const reopened = await transition(closed.body.version, 'REOPEN');
+    expect(reopened.response.status).toBe(201);
+    const corrected = await jsonRequest<RecordResponse & { episode: { id: string }; confirmation: null }>(baseUrl, correctionPath, { method: 'POST', headers: jsonHeaders(clinicianToken), body: JSON.stringify({ expectedVersion: confirmed.body.version, summary: 'Corrección tras reapertura explícita' }) });
+    expect(corrected.response.status).toBe(201);
+    expect(corrected.body.episode.id).toBe(id);
+    expect(corrected.body.confirmation).toBeNull();
+    const listed = await jsonRequest<{ data: Episode[] }>(baseUrl, endpoint, { headers: jsonHeaders(readerToken) });
+    expect(listed.body.data.find((item) => item.id === id)).toMatchObject({ activeCount: 1, pendingConfirmationCount: 1 });
+    const history = await jsonRequest<{ data: Array<{ id: string; action: string }> }>(baseUrl, `${endpoint}/${id}/history`, { headers: jsonHeaders(readerToken) });
+    expect(history.body.data.map((item) => item.action)).toEqual(expect.arrayContaining(['CREATE', 'ATTACH', 'CLOSE', 'REOPEN', 'CORRECT']));
+    await expect(prisma.clinicalEpisodeEvent.delete({ where: { id: history.body.data[0].id } })).rejects.toThrow();
+    const exported = await jsonRequest<{ records: Array<{ id: string; episode: { id: string } | null }> }>(baseUrl, `/api/patients/${patientId}/clinical-history/export`, { headers: jsonHeaders(readerToken) });
+    expect(exported.body.records.find((item) => item.id === corrected.body.id)?.episode?.id).toBe(id);
+  });
+
   it('no persiste PHI de payloads clínicos en la bitácora', async () => {
     const events = await prisma.auditEvent.findMany({ orderBy: { occurredAt: 'asc' } });
     expect(events.length).toBeGreaterThan(0);

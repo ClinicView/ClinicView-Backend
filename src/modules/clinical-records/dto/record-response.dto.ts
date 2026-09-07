@@ -3,8 +3,10 @@ import { RecordOrigin, RecordStatus, RecordType } from '@prisma/client';
 import { ClinicalRecordAttachmentResponseDto } from './record-attachment.dto';
 import { RecordSourceDto } from './publish-record.dto';
 import { RecordConfirmationDto } from './confirm-record.dto';
+import { EpisodeDto } from '../../clinical-episodes/episode.dto';
 
 export class RecordResponseDto {
+  @ApiPropertyOptional({ type: EpisodeDto, nullable: true }) episode: EpisodeDto | null;
   @ApiPropertyOptional({ type: RecordConfirmationDto, nullable: true }) confirmation: RecordConfirmationDto | null;
   @ApiProperty() id: string;
   @ApiProperty() patientId: string;

@@ -46,3 +46,26 @@ Migración 20260907140000_record_confirmation: agrega records.confirm a roles ba
 clínicos y administrador; los roles personalizados se configuran en Administración.
 Las sesiones deben renovar sus permisos o volver a iniciar sesión. La migración
 también refuerza en BD que la cita y la atención pertenezcan al mismo paciente.
+
+## Episodios clínicos
+
+Migración 20260907150000_clinical_episodes. Endpoints del paciente:
+GET/POST episodes; PATCH episodes/:id; POST episodes/:id/transition;
+GET episodes/:id/history; PATCH records/:id/episode.
+La lectura exige patients.read + records.read. Crear, editar o agrupar exige
+además records.create; cerrar/reabrir exige records.confirm. Los cambios envían
+la versión observada y motivo. El cierre/reapertura requiere atestación explícita.
+
+La asignación es opcional, no cambia contenido clínico confirmado y no fusiona
+atenciones. Solo agrupa versiones vigentes en episodios abiertos del mismo
+paciente, validando que la fecha no preceda al inicio. Cerrar exige al menos una
+atención activa, todas confirmadas y una fecha que no excluya atenciones.
+Las correcciones heredan el episodio y vuelven a quedar pendientes de confirmar.
+Corregir, anular y reagrupar exige reabrir previamente un episodio cerrado.
+
+Operaciones concurrentes se serializan con bloqueo de episodios y CAS; los
+conflictos revierten la operación completa. La base refuerza pertenencia al
+paciente y la inmutabilidad del historial de agrupación. No se elimina un episodio:
+la apertura equivocada se documenta editando con motivo, sin borrar el historial.
+Listas e historial se paginan de 20. Los conteos provienen de toda la base y
+separan versiones de atenciones activas y pendientes de confirmación.

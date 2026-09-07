@@ -12,6 +12,7 @@ const withCountArgs = {
   include: {
     source: true,
     confirmation: true,
+    episode: true,
     _count: { select: { corrections: true } },
     attachments: {
       include: { asset: true },
@@ -23,6 +24,7 @@ const withCountArgs = {
 export type RecordWithCount = Prisma.ClinicalRecordGetPayload<typeof withCountArgs>;
 
 export interface FindRecordsFilters {
+  episodeId?: string;
   sourceDocumentId?: string;
   recordType?: RecordType;
   status?: RecordStatus | 'ALL';
@@ -48,6 +50,7 @@ export class ClinicalRecordsRepository {
   ): Promise<{ records: RecordWithCount[]; total: number }> {
     const where: Prisma.ClinicalRecordWhereInput = {
       patientId,
+      ...(filters.episodeId && { episodeId: filters.episodeId }),
       ...(filters.sourceDocumentId && { source: { documentId: filters.sourceDocumentId } }),
       ...(filters.recordType && { recordType: filters.recordType }),
       ...(filters.status === 'ALL' ? {} : { status: filters.status ?? RecordStatus.ACTIVE }),

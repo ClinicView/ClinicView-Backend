@@ -291,6 +291,7 @@ describe('PatientsService', () => {
           createdByNameSnapshot: null,
           source: null,
           confirmation: null,
+          episode: null,
           summary: 'Consulta original',
           notes: 'Nota clínica',
           details: { chiefComplaint: 'Dolor torácico' },

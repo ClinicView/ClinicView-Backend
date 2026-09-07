@@ -9,6 +9,7 @@ import {
 } from '@prisma/client';
 import { ClinicalRecordAttachmentResponseDto } from '../../clinical-records/dto/record-attachment.dto';
 import { PatientContextDto } from './patient-context.dto';
+import { RecordSourceDto } from '../../clinical-records/dto/publish-record.dto';
 import { ClinicalSummaryResponseDto } from './clinical-summary.dto';
 import {
   DocumentClinicalMetadataDto,
@@ -35,6 +36,9 @@ export class ClinicalHistoryExportRecordDto {
   @ApiProperty({ enum: RecordOrigin }) origin: RecordOrigin;
   @ApiProperty({ enum: RecordStatus }) status: RecordStatus;
   @ApiProperty() attendedAt: Date;
+  @ApiProperty({ enum: ['INSTANT', 'DAY'] }) attendancePrecision: string;
+  @ApiPropertyOptional({ type: String, nullable: true }) createdByNameSnapshot: string | null;
+  @ApiPropertyOptional({ type: RecordSourceDto, nullable: true }) source: RecordSourceDto | null;
   @ApiProperty() summary: string;
   @ApiPropertyOptional({ type: String, nullable: true }) notes: string | null;
   @ApiProperty({

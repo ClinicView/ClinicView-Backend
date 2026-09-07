@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { RecordOrigin, RecordStatus, RecordType } from '@prisma/client';
 import { ClinicalRecordAttachmentResponseDto } from './record-attachment.dto';
+import { RecordSourceDto } from './publish-record.dto';
 
 export class RecordResponseDto {
   @ApiProperty() id: string;
@@ -9,6 +10,9 @@ export class RecordResponseDto {
   @ApiProperty({ enum: RecordOrigin }) origin: RecordOrigin;
   @ApiProperty({ enum: RecordStatus }) status: RecordStatus;
   @ApiProperty() attendedAt: Date;
+  @ApiProperty({ enum: ['INSTANT', 'DAY'] }) attendancePrecision: string;
+  @ApiPropertyOptional({ type: String, nullable: true }) createdByNameSnapshot: string | null;
+  @ApiPropertyOptional({ type: RecordSourceDto, nullable: true }) source: RecordSourceDto | null;
   @ApiProperty() summary: string;
   @ApiPropertyOptional({ type: String, nullable: true }) notes: string | null;
   @ApiProperty({ type: Object, description: 'Contenido tipado según recordType y schemaVersion.' })

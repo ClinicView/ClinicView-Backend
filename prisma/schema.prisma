@@ -317,6 +317,8 @@ model ClinicalRecord {
   status     RecordStatus @default(ACTIVE)
 
   attendedAt DateTime @map("attended_at") @db.Timestamptz
+  attendancePrecision String @default("INSTANT") @map("attendance_precision")
+  createdByNameSnapshot String? @map("created_by_name_snapshot")
   summary    String
   notes      String?
 
@@ -351,6 +353,7 @@ model ClinicalRecord {
   parentRecord ClinicalRecord?            @relation("CorrectionChain", fields: [parentRecordId], references: [id])
   corrections  ClinicalRecord[]           @relation("CorrectionChain")
   attachments  ClinicalRecordAttachment[]
+  source ClinicalRecordSource?
 
   @@index([patientId, attendedAt(sort: Desc)])
   @@index([patientId, status])
@@ -472,6 +475,7 @@ model MedicalDocument {
   patient          Patient @relation(fields: [patientId], references: [id])
   assignedReviewer User?   @relation("MedicalDocumentAssignedReviewer", fields: [assignedReviewerId], references: [id], onDelete: Restrict)
   metadataRevisions DocumentMetadataRevision[]
+  sourcedRecords ClinicalRecordSource[]
 
   @@index([patientId, createdAt(sort: Desc)])
   @@index([status])
@@ -493,4 +497,25 @@ model DocumentMetadataRevision {
 
   @@unique([documentId, version])
   @@map("document_metadata_revisions")
+}
+
+// The source citation is immutable. Corrections inherit its snapshot in a new row.
+model ClinicalRecordSource {
+  id String @id @default(uuid()) @db.Uuid
+  recordId String @unique @map("record_id") @db.Uuid
+  documentId String @map("document_id") @db.Uuid
+  documentVersion Int @map("document_version")
+  documentName String @map("document_name")
+  documentMetadata Json @map("document_metadata")
+  pageFrom Int @map("page_from")
+  pageTo Int @map("page_to")
+  sourceNote String @map("source_note") @db.VarChar(1000)
+  publicationKey String? @unique @map("publication_key") @db.Uuid
+  publishedBy String @map("published_by") @db.Uuid
+  publishedByName String @map("published_by_name")
+  publishedAt DateTime @default(now()) @map("published_at") @db.Timestamptz(3)
+  record ClinicalRecord @relation(fields: [recordId], references: [id], onDelete: Restrict)
+  document MedicalDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  @@index([documentId])
+  @@map("clinical_record_sources")
 }

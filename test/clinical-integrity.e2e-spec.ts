@@ -1,4 +1,5 @@
 import type { AddressInfo } from 'node:net';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
@@ -1373,6 +1374,52 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     expect(
       await prisma.documentMetadataRevision.findUnique({ where: { id: metadata.id } }),
     ).toEqual(metadata);
+  });
+
+  it('publica desde un original validado con cita inmutable, fecha civil y prevención de duplicados', async () => {
+    const uploaded = await uploadMultipart<DocumentResponse>(`/api/patients/${patientId}/documents`, clinicianToken, VALID_PDF, 'original-transcripcion-e2e.pdf', 'application/pdf');
+    expect(uploaded.response.status).toBe(201);
+    const original = await prisma.medicalDocument.update({ where: { id: uploaded.body.id }, data: { status: 'VALIDATED', correctedText: CLINICAL_E2E_PHI.ocrText, clinicalMetadata: { clinicalDate: '2023-09-27', pageCount: 2 } } });
+    const body = {
+      recordType: 'CONSULTATION', attendancePrecision: 'DAY', attendedAt: '2023-09-27',
+      summary: CLINICAL_E2E_PHI.recordSummary, details: VALID_RECORD_DETAILS.CONSULTATION,
+      doctorName: 'Profesional original sintético', sourceDocumentId: original.id,
+      expectedDocumentVersion: original.version, pageFrom: 1, pageTo: 2,
+      sourceNote: CLINICAL_E2E_PHI.recordNotes, sourceVerified: true, publicationKey: randomUUID(),
+    };
+    type Published = RecordResponse & { attendedAt: string; attendancePrecision: string; createdByNameSnapshot: string; source: { documentId: string; documentVersion: number; pageFrom: number; publishedByName: string; publicationKey?: string } };
+    const publish = (payload: object, token = clinicianToken) => jsonRequest<Published>(baseUrl, `/api/patients/${patientId}/records/from-document`, { method: 'POST', headers: jsonHeaders(token), body: JSON.stringify(payload) });
+    expect((await publish(body, readerToken)).response.status).toBe(403);
+    expect((await publish({ ...body, sourceVerified: false })).response.status).toBe(400);
+    expect((await publish({ ...body, pageTo: 3 })).response.status).toBe(400);
+    expect((await publish({ ...body, attendedAt: '2023-02-30' })).response.status).toBe(400);
+    expect((await publish({ ...body, sourceDocumentId: randomUUID() })).response.status).toBe(404);
+    const race = await Promise.all([publish(body), publish(body)]);
+    expect(race.map((result) => result.response.status).sort()).toEqual([201, 409]);
+    const created = race.find((result) => result.response.status === 201)!.body;
+    expect(created.origin).toBe('DIGITIZED');
+    expect(created.attendancePrecision).toBe('DAY');
+    expect(created.attendedAt).toBe('2023-09-27T05:00:00.000Z');
+    expect(created.createdByNameSnapshot).toBeTruthy();
+    expect(created.source).toMatchObject({ documentId: original.id, documentVersion: original.version, pageFrom: 1 });
+    expect(created.source.publicationKey).toBeUndefined();
+    const duplicate = await publish({ ...body, expectedDocumentVersion: original.version + 1 });
+    expect(duplicate.response.status).toBe(409);
+    expect(await prisma.clinicalRecordSource.count({ where: { documentId: original.id } })).toBe(1);
+    const corrected = await jsonRequest<Published>(baseUrl, `/api/patients/${patientId}/records/${created.id}/correct`, { method: 'POST', headers: jsonHeaders(clinicianToken), body: JSON.stringify({ expectedVersion: created.version, summary: 'Corrección sintética conservando procedencia' }) });
+    expect(corrected.response.status).toBe(201);
+    expect(corrected.body.source).toEqual(created.source);
+    expect(corrected.body.attendancePrecision).toBe('DAY');
+    const linked = await jsonRequest<{ data: Published[]; total: number }>(baseUrl, `/api/patients/${patientId}/records?status=ALL&sourceDocumentId=${original.id}`, { headers: jsonHeaders(readerToken) });
+    expect(linked.response.status).toBe(200);
+    expect(linked.body.total).toBe(2);
+    const citation = await prisma.clinicalRecordSource.findUniqueOrThrow({ where: { recordId: created.id } });
+    await expect(prisma.clinicalRecordSource.update({ where: { id: citation.id }, data: { pageFrom: 2 } })).rejects.toThrow();
+    const exported = await jsonRequest<{ records: Published[] }>(baseUrl, `/api/patients/${patientId}/clinical-history/export`, { headers: jsonHeaders(readerToken) });
+    expect(exported.response.status).toBe(200);
+    expect(exported.body.records.find((record) => record.id === corrected.body.id)?.source).toEqual(created.source);
+    await prisma.medicalDocument.update({ where: { id: original.id }, data: { status: 'PENDING' } });
+    expect((await publish({ ...body, publicationKey: randomUUID(), expectedDocumentVersion: original.version + 1 })).response.status).toBe(409);
   });
 
   it('no persiste PHI de payloads clínicos en la bitácora', async () => {

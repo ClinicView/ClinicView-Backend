@@ -25,6 +25,7 @@ import { Audited } from '../audit/audit.decorator';
 import { ClinicalRecordsService } from './clinical-records.service';
 import { CorrectRecordDto } from './dto/correct-record.dto';
 import { CreateRecordDto } from './dto/create-record.dto';
+import { PublishRecordDto } from './dto/publish-record.dto';
 import { FindRecordsQueryDto } from './dto/find-records-query.dto';
 import { RecordResponseDto } from './dto/record-response.dto';
 import {
@@ -73,6 +74,31 @@ export class ClinicalRecordsController {
     @Query() query: FindRecordsQueryDto,
   ) {
     return this.service.findByPatient(patientId, query);
+  }
+
+  @Post('from-document')
+  @RequirePermissions(
+    'patients.read',
+    'records.read',
+    'records.create',
+    'documents.read',
+    'documents.validate',
+  )
+  @Audited(AUDIT_ACTIONS.CLINICAL_RECORD_PUBLISHED, {
+    resourceType: 'CLINICAL_RECORD',
+    patientParam: 'patientId',
+    resourceFromResponseId: true,
+  })
+  @ApiOperation({
+    summary: 'Publicar una transcripción humana vinculada a páginas de un original validado',
+  })
+  @ApiResponse({ status: 201, type: RecordResponseDto })
+  publish(
+    @Param('patientId', ParseUUIDPipe) patientId: string,
+    @Body() dto: PublishRecordDto,
+    @Request() req: AuthRequest,
+  ) {
+    return this.service.create(patientId, dto, req.user.sub, dto);
   }
 
   @Get('draft/current')

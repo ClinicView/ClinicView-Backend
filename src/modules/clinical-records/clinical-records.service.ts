@@ -29,6 +29,9 @@ import {
 } from './dto/record-draft.dto';
 import { RecordResponseDto } from './dto/record-response.dto';
 import { VoidRecordDto } from './dto/void-record.dto';
+import { PublishRecordDto } from './dto/publish-record.dto';
+import { recordAttendance } from './dto/record-attendance';
+import { recordSourceResponse } from './record-source';
 import {
   ClinicalRecordsRepository,
   RecordWithCount,
@@ -91,64 +94,130 @@ export class ClinicalRecordsService {
     patientId: string,
     dto: CreateRecordDto,
     actorId: string,
+    source?: PublishRecordDto,
   ): Promise<RecordResponseDto> {
     this.requireActor(actorId);
     this.assertDraftIdentityPair(dto.draftId, dto.expectedDraftVersion);
     const details = this.normalizeDetails(dto.recordType, dto.details);
     const schemaVersion = dto.schemaVersion ?? CLINICAL_RECORD_SCHEMA_VERSION;
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      await this.requireActivePatient(patientId, tx);
-      const professional = await this.resolveProfessional(dto, tx);
-      const created = await this.repo.createInTransaction(
-        {
-          patientId,
-          recordType: dto.recordType,
-          // La procedencia de una entrada manual nunca se confía al cliente.
-          origin: RecordOrigin.MANUAL,
-          attendedAt: new Date(dto.attendedAt),
-          summary: requiredText(dto.summary, 'summary'),
-          notes: optionalText(dto.notes),
-          details,
-          schemaVersion,
-          ...professional,
-          service: optionalText(dto.service),
-          preliminaryDiagnosis: optionalText(dto.preliminaryDiagnosis),
-          plan: optionalText(dto.plan),
-          priority: dto.priority ?? 'NORMAL',
-          createdBy: actorId,
-        },
-        tx,
-      );
-
-      const bound = await this.media.bindAttachments(
-        patientId,
-        created.id,
-        actorId,
-        dto.attachments ?? [],
-        new Set(),
-        tx,
-      );
-
-      if (dto.draftId) {
-        const consumed = await this.repo.deleteDraftByIdForActor(
-          dto.draftId,
-          patientId,
-          actorId,
-          dto.expectedDraftVersion as number,
-          tx,
-        );
-        if (!consumed) {
-          throw new ConflictException(
-            'El borrador ya no existe, expiró o pertenece a otro usuario. El registro no fue creado.',
+    const result = await this.prisma
+      .$transaction(
+        async (tx) => {
+          await this.requireActivePatient(patientId, tx);
+          const actor = await tx.user.findUnique({
+            where: { id: actorId },
+            select: { isActive: true, fullName: true, username: true },
+          });
+          if (!actor?.isActive) throw new UnauthorizedException('El usuario debe estar activo.');
+          const sourceDoc = source
+            ? await tx.medicalDocument.findFirst({
+                where: { id: source.sourceDocumentId, patientId },
+              })
+            : null;
+          if (source) {
+            if (!sourceDoc)
+              throw new NotFoundException('Documento de origen no encontrado para este paciente.');
+            if (
+              sourceDoc.status !== 'VALIDATED' ||
+              sourceDoc.version !== source.expectedDocumentVersion
+            )
+              throw new ConflictException(
+                'El original debe estar validado y conservar la versión revisada. Recarga el documento.',
+              );
+            if (
+              !source.sourceVerified ||
+              source.sourceNote.trim().length < 5 ||
+              source.pageTo < source.pageFrom
+            )
+              throw new BadRequestException('Verifica la transcripción y el rango de páginas.');
+            const metadata = sourceDoc.clinicalMetadata as { pageCount?: number };
+            if (metadata.pageCount && source.pageTo > metadata.pageCount)
+              throw new BadRequestException('El rango supera las páginas declaradas del original.');
+            if (sourceDoc.assignedReviewerId && sourceDoc.assignedReviewerId !== actorId)
+              throw new ConflictException('El original está asignado a otro revisor.');
+            await tx.medicalDocument.update({
+              where: {
+                id: sourceDoc.id,
+                patientId,
+                version: source.expectedDocumentVersion,
+                status: 'VALIDATED',
+              },
+              data: { version: { increment: 1 }, updatedBy: actorId },
+            });
+          }
+          const professional = await this.resolveProfessional(dto, tx);
+          const created = await this.repo.createInTransaction(
+            {
+              patientId,
+              recordType: dto.recordType,
+              // La procedencia de una entrada manual nunca se confía al cliente.
+              origin: source ? RecordOrigin.DIGITIZED : RecordOrigin.MANUAL,
+              attendedAt: recordAttendance(dto.attendedAt, dto.attendancePrecision),
+              attendancePrecision: dto.attendancePrecision ?? 'INSTANT',
+              createdByNameSnapshot: actor.fullName || actor.username,
+              summary: requiredText(dto.summary, 'summary'),
+              notes: optionalText(dto.notes),
+              details,
+              schemaVersion,
+              ...professional,
+              service: optionalText(dto.service),
+              preliminaryDiagnosis: optionalText(dto.preliminaryDiagnosis),
+              plan: optionalText(dto.plan),
+              priority: dto.priority ?? 'NORMAL',
+              createdBy: actorId,
+            },
+            tx,
           );
-        }
-      }
 
-      const hydrated = await this.repo.findByIdAndPatient(created.id, patientId, tx);
-      if (!hydrated) throw new ConflictException('No se pudo recuperar el registro creado.');
-      return { record: hydrated, bound };
-    });
+          if (source && sourceDoc)
+            await tx.clinicalRecordSource.create({
+              data: {
+                recordId: created.id,
+                documentId: sourceDoc.id,
+                documentVersion: sourceDoc.version,
+                documentName: sourceDoc.originalName,
+                documentMetadata: sourceDoc.clinicalMetadata as Prisma.InputJsonObject,
+                pageFrom: source.pageFrom,
+                pageTo: source.pageTo,
+                sourceNote: source.sourceNote.trim(),
+                publicationKey: source.publicationKey,
+                publishedBy: actorId,
+                publishedByName: actor.fullName || actor.username,
+              },
+            });
+
+          const bound = await this.media.bindAttachments(
+            patientId,
+            created.id,
+            actorId,
+            dto.attachments ?? [],
+            new Set(),
+            tx,
+          );
+
+          if (dto.draftId) {
+            const consumed = await this.repo.deleteDraftByIdForActor(
+              dto.draftId,
+              patientId,
+              actorId,
+              dto.expectedDraftVersion as number,
+              tx,
+            );
+            if (!consumed) {
+              throw new ConflictException(
+                'El borrador ya no existe, expiró o pertenece a otro usuario. El registro no fue creado.',
+              );
+            }
+          }
+
+          const hydrated = await this.repo.findByIdAndPatient(created.id, patientId, tx);
+          if (!hydrated) throw new ConflictException('No se pudo recuperar el registro creado.');
+          return { record: hydrated, bound };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      )
+      .catch((error: unknown) => this.clinicalConflict(error));
 
     this.media.logBoundAttachments(actorId, patientId, result.record.id, result.bound);
     return this.toResponse(result.record);
@@ -165,6 +234,7 @@ export class ClinicalRecordsService {
 
     const { records, total } = await this.repo.findByPatient(patientId, {
       recordType: query.recordType,
+      sourceDocumentId: query.sourceDocumentId,
       status: query.status,
       origin: query.origin,
       from: from?.date,
@@ -221,6 +291,13 @@ export class ClinicalRecordsService {
       }
 
       const professional = await this.resolveCorrectedProfessional(original, dto, tx);
+      if (dto.attendancePrecision && !dto.attendedAt)
+        throw new BadRequestException('Envía la fecha junto con un cambio de precisión.');
+      const actor = await tx.user.findUnique({
+        where: { id: actorId },
+        select: { isActive: true, fullName: true, username: true },
+      });
+      if (!actor?.isActive) throw new UnauthorizedException('El usuario debe estar activo.');
       const marked = await this.repo.markCorrected(id, patientId, dto.expectedVersion, actorId, tx);
       if (!marked) {
         throw new ConflictException(
@@ -234,7 +311,14 @@ export class ClinicalRecordsService {
           recordType,
           // Una corrección conserva la procedencia de la entrada original.
           origin: original.origin,
-          attendedAt: dto.attendedAt ? new Date(dto.attendedAt) : original.attendedAt,
+          attendedAt: dto.attendedAt
+            ? recordAttendance(
+                dto.attendedAt,
+                dto.attendancePrecision ?? original.attendancePrecision ?? 'INSTANT',
+              )
+            : original.attendedAt,
+          attendancePrecision: dto.attendancePrecision ?? original.attendancePrecision ?? 'INSTANT',
+          createdByNameSnapshot: actor.fullName || actor.username,
           summary: hasOwn(dto, 'summary') ? requiredText(dto.summary, 'summary') : original.summary,
           notes: hasOwn(dto, 'notes') ? optionalText(dto.notes) : original.notes,
           details,
@@ -255,6 +339,16 @@ export class ClinicalRecordsService {
       const reusableAssetIds = new Set(
         original.attachments.map((attachment) => attachment.assetId),
       );
+      if (original.source) {
+        const citation = recordSourceResponse(original.source)!;
+        await tx.clinicalRecordSource.create({
+          data: {
+            ...citation,
+            documentMetadata: citation.documentMetadata as Prisma.InputJsonObject,
+            recordId: created.id,
+          },
+        });
+      }
       const requestedAttachments =
         dto.attachments ??
         original.attachments.map((attachment) => ({
@@ -543,6 +637,20 @@ export class ClinicalRecordsService {
     }
   }
 
+  private clinicalConflict(error: unknown): never {
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      ['P2002', 'P2025', 'P2034'].includes(String(error.code))
+    ) {
+      throw new ConflictException(
+        'El registro ya fue enviado o los datos cambiaron. Revisa el historial antes de reintentar.',
+      );
+    }
+    throw error;
+  }
+
   private assertDraftIdentityPair(id?: string, version?: number): void {
     if ((id === undefined) !== (version === undefined)) {
       throw new BadRequestException(
@@ -571,6 +679,9 @@ export class ClinicalRecordsService {
       origin: record.origin,
       status: record.status,
       attendedAt: record.attendedAt,
+      attendancePrecision: record.attendancePrecision ?? 'INSTANT',
+      createdByNameSnapshot: record.createdByNameSnapshot ?? null,
+      source: recordSourceResponse(record.source),
       summary: record.summary,
       notes: record.notes,
       details: asInputJsonObject(record.details) as Record<string, unknown>,

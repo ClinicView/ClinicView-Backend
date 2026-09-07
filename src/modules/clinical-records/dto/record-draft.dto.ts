@@ -13,7 +13,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { RecordType } from '@prisma/client';
-import { IsPastOrPresentZonedIsoDateTime } from '../../../common/validation/clinical-date';
+import { IsRecordAttendance, type AttendancePrecision } from './record-attendance';
 import { RECORD_PRIORITIES, type RecordPriority } from './create-record.dto';
 import {
   CLINICAL_DETAILS_ONE_OF,
@@ -36,11 +36,16 @@ export class RecordDraftPayloadDto {
   @IsEnum(RecordType)
   recordType?: RecordType;
 
-  @ApiPropertyOptional({ type: String, format: 'date-time' })
+  @ApiPropertyOptional({ type: String, description: 'ISO con zona o fecha civil según attendancePrecision.' })
   @IsOptional()
   @Transform(emptyToUndefined)
-  @IsPastOrPresentZonedIsoDateTime()
+  @IsRecordAttendance()
   attendedAt?: string;
+
+  @ApiPropertyOptional({ enum: ['INSTANT', 'DAY'] })
+  @IsOptional()
+  @IsIn(['INSTANT', 'DAY'])
+  attendancePrecision?: AttendancePrecision;
 
   @ApiPropertyOptional({ maxLength: 2000 })
   @IsOptional()

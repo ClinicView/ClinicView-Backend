@@ -14,7 +14,7 @@ import {
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { RecordType } from '@prisma/client';
-import { IsPastOrPresentZonedIsoDateTime } from '../../../common/validation/clinical-date';
+import { IsRecordAttendance, type AttendancePrecision } from './record-attendance';
 import {
   CLINICAL_DETAILS_ONE_OF,
   CLINICAL_RECORD_SCHEMA_VERSION,
@@ -34,12 +34,16 @@ export class CreateRecordDto {
 
   @ApiProperty({
     type: String,
-    format: 'date-time',
-    description: 'Fecha y hora de la atención como instante ISO 8601 con zona horaria',
+    description: 'ISO con zona si INSTANT; YYYY-MM-DD si DAY (hora no consignada).',
     example: '2026-09-02T09:30:00-05:00',
   })
-  @IsPastOrPresentZonedIsoDateTime()
+  @IsRecordAttendance()
   attendedAt: string;
+
+  @ApiPropertyOptional({ enum: ['INSTANT', 'DAY'], default: 'INSTANT' })
+  @IsOptional()
+  @IsIn(['INSTANT', 'DAY'])
+  attendancePrecision?: AttendancePrecision;
 
   @ApiProperty({ maxLength: 2000 })
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))

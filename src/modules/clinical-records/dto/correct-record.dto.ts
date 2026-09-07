@@ -13,7 +13,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { RecordType } from '@prisma/client';
-import { IsPastOrPresentZonedIsoDateTime } from '../../../common/validation/clinical-date';
+import { IsRecordAttendance, type AttendancePrecision } from './record-attendance';
 import { RECORD_PRIORITIES, type RecordPriority } from './create-record.dto';
 import {
   CLINICAL_DETAILS_ONE_OF,
@@ -36,13 +36,17 @@ export class CorrectRecordDto {
 
   @ApiPropertyOptional({
     type: String,
-    format: 'date-time',
-    description: 'Nuevo instante ISO 8601 con zona horaria; hereda el original si se omite',
+    description: 'Fecha corregida con precisión explícita. Si se omite, hereda fecha y precisión originales.',
     example: '2026-09-02T09:30:00-05:00',
   })
   @IsOptional()
-  @IsPastOrPresentZonedIsoDateTime()
+  @IsRecordAttendance()
   attendedAt?: string;
+
+  @ApiPropertyOptional({ enum: ['INSTANT', 'DAY'] })
+  @IsOptional()
+  @IsIn(['INSTANT', 'DAY'])
+  attendancePrecision?: AttendancePrecision;
 
   @ApiPropertyOptional({ maxLength: 2000 })
   @ValidateIf((_object, value: unknown) => value !== undefined)

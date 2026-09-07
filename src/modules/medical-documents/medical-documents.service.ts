@@ -17,6 +17,10 @@ import { StorageService } from '../../core/storage/storage.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CorrectDocumentDto } from './dto/correct-document.dto';
 import { DocumentResponseDto } from './dto/document-response.dto';
+import {
+  DocumentClinicalMetadataDto,
+  normalizeDocumentMetadata,
+} from './dto/document-metadata.dto';
 import { FindDocumentsQueryDto } from './dto/find-documents-query.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
 import {
@@ -67,9 +71,8 @@ function getUploadMaxSizeBytes(): number {
     process.env.UPLOAD_MAX_SIZE_MB ?? String(DEFAULT_UPLOAD_MAX_SIZE_MB),
     10,
   );
-  const sizeMb = Number.isFinite(configured) && configured > 0
-    ? configured
-    : DEFAULT_UPLOAD_MAX_SIZE_MB;
+  const sizeMb =
+    Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_UPLOAD_MAX_SIZE_MB;
   return sizeMb * 1024 * 1024;
 }
 
@@ -97,14 +100,16 @@ function normalizeStoredEntities(
     const candidate = entity as Record<string, unknown>;
     if (typeof candidate.type !== 'string' || typeof candidate.value !== 'string') return [];
 
-    return [{
-      type: candidate.type,
-      value: candidate.value.trim(),
-      normalizedValue:
-        typeof candidate.normalizedValue === 'string'
-          ? candidate.normalizedValue.trim() || null
-          : null,
-    }];
+    return [
+      {
+        type: candidate.type,
+        value: candidate.value.trim(),
+        normalizedValue:
+          typeof candidate.normalizedValue === 'string'
+            ? candidate.normalizedValue.trim() || null
+            : null,
+      },
+    ];
   });
 }
 
@@ -159,6 +164,7 @@ export class MedicalDocumentsService implements OnModuleInit {
     patientId: string,
     file: Express.Multer.File,
     userId?: string,
+    metadata: DocumentClinicalMetadataDto = {},
   ): Promise<DocumentResponseDto> {
     if (!file) {
       throw new BadRequestException('Archivo requerido.');
@@ -187,6 +193,7 @@ export class MedicalDocumentsService implements OnModuleInit {
     }
 
     const filename = `${randomUUID()}${ext}`;
+    const clinicalMetadata = normalizeDocumentMetadata(metadata);
     let storagePath = `${patientId}/${filename}`;
     let doc: MedicalDocumentWithAssignee;
     try {
@@ -197,6 +204,7 @@ export class MedicalDocumentsService implements OnModuleInit {
         storagePath,
         mimeType: detectedMime,
         sizeBytes: file.size,
+        clinicalMetadata: clinicalMetadata as Prisma.InputJsonObject,
         ...(userId && { createdBy: userId }),
       });
     } catch (error) {
@@ -248,9 +256,7 @@ export class MedicalDocumentsService implements OnModuleInit {
       );
     }
     if (doc.status !== DocumentStatus.PENDING && doc.status !== DocumentStatus.FAILED) {
-      throw new ConflictException(
-        `No se puede procesar un documento con estado ${doc.status}.`,
-      );
+      throw new ConflictException(`No se puede procesar un documento con estado ${doc.status}.`);
     }
 
     const processing = await this.repo.updateStatus(id, DocumentStatus.PROCESSING, {
@@ -349,9 +355,7 @@ export class MedicalDocumentsService implements OnModuleInit {
 
     const normalizedEntities = normalizeCorrectedEntities(dto.correctedEntities);
     const savedText = (doc.correctedText ?? doc.ocrText ?? '').trim();
-    const savedEntities = normalizeStoredEntities(
-      doc.correctedEntities ?? doc.nerEntities,
-    );
+    const savedEntities = normalizeStoredEntities(doc.correctedEntities ?? doc.nerEntities);
     const contentChanged =
       correctedText !== savedText ||
       JSON.stringify(normalizedEntities) !== JSON.stringify(savedEntities);
@@ -410,7 +414,9 @@ export class MedicalDocumentsService implements OnModuleInit {
     const updated = await this.repo.saveCorrection(id, patientId, dto.expectedVersion, userId, {
       ...(hasCorrectedText && { correctedText: dto.correctedText?.trim() ?? null }),
       ...(hasCorrectedEntities && {
-        correctedEntities: normalizeCorrectedEntities(dto.correctedEntities) as unknown as Prisma.InputJsonValue,
+        correctedEntities: normalizeCorrectedEntities(
+          dto.correctedEntities,
+        ) as unknown as Prisma.InputJsonValue,
       }),
       correctedAt: new Date(),
       correctedById: userId,
@@ -435,13 +441,8 @@ export class MedicalDocumentsService implements OnModuleInit {
     requireAuthenticatedActor(userId);
     const doc = await this.repo.findByIdAndPatient(id, patientId);
     if (!doc) throw new NotFoundException('Documento no encontrado.');
-    if (
-      doc.status !== DocumentStatus.PROCESSED &&
-      doc.status !== DocumentStatus.PENDING
-    ) {
-      throw new ConflictException(
-        `No se puede rechazar un documento con estado ${doc.status}.`,
-      );
+    if (doc.status !== DocumentStatus.PROCESSED && doc.status !== DocumentStatus.PENDING) {
+      throw new ConflictException(`No se puede rechazar un documento con estado ${doc.status}.`);
     }
     if (doc.status === DocumentStatus.PROCESSED) {
       this.ensureAssignedToActor(doc, userId);
@@ -501,6 +502,7 @@ export class MedicalDocumentsService implements OnModuleInit {
   private toResponse(doc: MedicalDocumentWithAssignee): DocumentResponseDto {
     return {
       id: doc.id,
+      clinicalMetadata: (doc.clinicalMetadata ?? {}) as DocumentClinicalMetadataDto,
       patientId: doc.patientId,
       originalName: doc.originalName,
       mimeType: doc.mimeType,

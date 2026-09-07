@@ -166,3 +166,8 @@ export const EMPTY_CLINICAL_SUMMARY: ClinicalSummaryPayloadDto = {
   medicationStatus: ReconciliationStatus.UNKNOWN,
   medications: [],
 };
+
+export class ClinicalSummaryHistoryResponseDto {
+  @ApiProperty({ type: [ClinicalSummaryResponseDto] }) data: ClinicalSummaryResponseDto[];
+  @ApiProperty({ type: Number, nullable: true }) nextBeforeVersion: number | null;
+}

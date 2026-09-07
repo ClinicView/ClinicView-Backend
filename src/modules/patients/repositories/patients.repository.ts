@@ -83,6 +83,8 @@ const clinicalHistoryExportArgs = {
     },
     medicalDocuments: {
       select: {
+        clinicalMetadata: true,
+        metadataRevisions: { orderBy: { version: 'desc' } },
         id: true,
         originalName: true,
         mimeType: true,

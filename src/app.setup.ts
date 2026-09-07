@@ -29,7 +29,14 @@ export function setupApp(app: INestApplication, options: AppSetupOptions = {}): 
 
   if (options.enableSwagger === false) return;
 
-  const swaggerConfig = new DocumentBuilder()
+  const document = SwaggerModule.createDocument(app, createSwaggerConfig());
+  SwaggerModule.setup('api/docs', app, document, {
+    swaggerOptions: { persistAuthorization: true },
+  });
+}
+
+export function createSwaggerConfig() {
+  return new DocumentBuilder()
     .setTitle('Plataforma Clínica Hospitalaria — API')
     .setDescription(
       'API interna del sistema de digitalización y registro de historias clínicas. ' +
@@ -40,8 +47,4 @@ export function setupApp(app: INestApplication, options: AppSetupOptions = {}): 
     .addCookieAuth(REFRESH_COOKIE_NAME, { type: 'apiKey', in: 'cookie' }, 'refresh-cookie')
     .build();
 
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('api/docs', app, document, {
-    swaggerOptions: { persistAuthorization: true },
-  });
 }

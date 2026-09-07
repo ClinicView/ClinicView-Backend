@@ -20,6 +20,7 @@ import { Audited } from '../audit/audit.decorator';
 import { AUDIT_ACTIONS } from '../audit/audit-action';
 import { ClinicalSummaryResponseDto, SaveClinicalSummaryDto } from './dto/clinical-summary.dto';
 import { ClinicalSummaryService } from './clinical-summary.service';
+import { ClinicalSummaryHistoryResponseDto } from './dto/clinical-summary.dto';
 
 class SummaryHistoryQueryDto {
   @ApiPropertyOptional({ minimum: 1 })
@@ -51,6 +52,7 @@ export class ClinicalSummaryController {
   }
 
   @Get('history')
+  @ApiResponse({ status: 200, type: ClinicalSummaryHistoryResponseDto })
   @Header('Cache-Control', 'private, no-store')
   @RequirePermissions('patients.read', 'records.read')
   @Audited(AUDIT_ACTIONS.CLINICAL_SUMMARY_VIEWED, {

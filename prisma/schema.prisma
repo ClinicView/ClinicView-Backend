@@ -443,6 +443,7 @@ model MedicalDocument {
   mimeType             String         @map("mime_type")
   sizeBytes            Int            @map("size_bytes")
   status               DocumentStatus @default(PENDING)
+  clinicalMetadata     Json           @default("{}") @map("clinical_metadata")
   ocrText              String?        @map("ocr_text")
   nerEntities          Json?          @map("ner_entities")
   correctedText        String?        @map("corrected_text")
@@ -470,10 +471,26 @@ model MedicalDocument {
 
   patient          Patient @relation(fields: [patientId], references: [id])
   assignedReviewer User?   @relation("MedicalDocumentAssignedReviewer", fields: [assignedReviewerId], references: [id], onDelete: Restrict)
+  metadataRevisions DocumentMetadataRevision[]
 
   @@index([patientId, createdAt(sort: Desc)])
   @@index([status])
   @@index([status, reviewPriority, processedAt])
   @@index([assignedReviewerId, status])
   @@map("medical_documents")
+}
+
+model DocumentMetadataRevision {
+  id String @id @default(uuid()) @db.Uuid
+  documentId String @map("document_id") @db.Uuid
+  version Int
+  metadata Json
+  reason String @db.VarChar(500)
+  recordedBy String? @map("recorded_by") @db.Uuid
+  recordedByName String? @map("recorded_by_name")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  document MedicalDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@unique([documentId, version])
+  @@map("document_metadata_revisions")
 }

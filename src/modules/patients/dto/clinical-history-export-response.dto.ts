@@ -10,6 +10,10 @@ import {
 import { ClinicalRecordAttachmentResponseDto } from '../../clinical-records/dto/record-attachment.dto';
 import { PatientContextDto } from './patient-context.dto';
 import { ClinicalSummaryResponseDto } from './clinical-summary.dto';
+import {
+  DocumentClinicalMetadataDto,
+  DocumentMetadataRevisionDto,
+} from '../../medical-documents/dto/document-metadata.dto';
 
 export class ClinicalHistoryExportPatientDto extends PatientContextDto {
   @ApiProperty() id: string;
@@ -62,6 +66,9 @@ export class ClinicalHistoryExportRecordDto {
 }
 
 export class ClinicalHistoryExportDocumentDto {
+  @ApiProperty({ type: DocumentClinicalMetadataDto }) clinicalMetadata: DocumentClinicalMetadataDto;
+  @ApiProperty({ type: [DocumentMetadataRevisionDto] })
+  metadataRevisions: DocumentMetadataRevisionDto[];
   @ApiProperty() id: string;
   @ApiProperty() originalName: string;
   @ApiProperty() mimeType: string;

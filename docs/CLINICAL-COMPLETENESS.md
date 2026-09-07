@@ -22,7 +22,7 @@ versión. Desplegar coordinadamente con el frontend que envía `expectedVersion`
 
 ## Siguientes bloques del alcance aprobado
 
-1. Metadatos clínicos de documentos, fecha/rango y procedencia; confirmación de carga.
+1. Metadatos clínicos, fecha/rango, procedencia y confirmación de carga: completado en el bloque 2.
 2. Publicación humana de un documento validado como registro digitalizado enlazado.
 3. Autoría profesional, finalización y episodios; diferenciar atestación de firma
    digital certificada (esta última requiere una integración real).
@@ -33,3 +33,23 @@ versión. Desplegar coordinadamente con el frontend que envía `expectedVersion`
    no queda implícitamente autorizada una contratación ni acreditación legal.
 
 IA fuera del alcance. No se infieren diagnósticos, alergias ni tratamientos.
+
+## Bloque 2: fechas clínicas y procedencia documental
+
+La carga admite tipo documental, fecha civil o período, institución, servicio,
+profesional original, páginas declaradas y observaciones. Los campos desconocidos
+permanecen vacíos. Se validan fechas reales/no futuras, orden del período y límites.
+
+`PATCH /patients/:patientId/documents/:documentId/metadata` requiere versión,
+motivo y permisos de paciente, lectura documental y validación. Se respeta la
+asignación a otro revisor. La transacción conserva la identificación anterior y
+la nueva, con actor y motivo. El historial tiene cursor y páginas de 20; la
+exportación completa contiene todas las revisiones sin paginar.
+
+La migración `20260907110000_document_clinical_metadata` también impide `UPDATE`
+y `DELETE` de ambas tablas de revisiones clínicas mediante triggers. Los cambios
+se representan agregando una nueva revisión, no reemplazando las anteriores.
+
+`npm run gen:openapi` genera `openapi.generated.json` sin iniciar un servidor ni
+leer pacientes. El frontend puede regenerar contratos con `npm run gen-types:local`
+cuando ambos repositorios están en carpetas hermanas. No usa credenciales reales.

@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DocumentStatus, ReviewPriority } from '@prisma/client';
 import { ValidationChecklistSnapshotDto } from './validate-document.dto';
+import { DocumentClinicalMetadataDto } from './document-metadata.dto';
 
 export class DocumentReviewAssigneeDto {
   @ApiProperty() id: string;
@@ -10,6 +11,8 @@ export class DocumentReviewAssigneeDto {
 }
 
 export class DocumentResponseDto {
+  @ApiPropertyOptional({ type: DocumentClinicalMetadataDto })
+  clinicalMetadata?: DocumentClinicalMetadataDto;
   @ApiProperty() id: string;
   @ApiProperty() patientId: string;
   @ApiProperty() originalName: string;
@@ -23,7 +26,10 @@ export class DocumentResponseDto {
     items: {
       type: 'object',
       properties: {
-        type: { type: 'string', enum: ['DIAGNOSIS', 'SYMPTOM', 'MEDICATION', 'PROCEDURE', 'CLINICAL_DATE', 'OBSERVATION'] },
+        type: {
+          type: 'string',
+          enum: ['DIAGNOSIS', 'SYMPTOM', 'MEDICATION', 'PROCEDURE', 'CLINICAL_DATE', 'OBSERVATION'],
+        },
         value: { type: 'string' },
         normalizedValue: { type: 'string', nullable: true },
         sourceSpan: {
@@ -47,7 +53,10 @@ export class DocumentResponseDto {
     items: {
       type: 'object',
       properties: {
-        type: { type: 'string', enum: ['DIAGNOSIS', 'SYMPTOM', 'MEDICATION', 'PROCEDURE', 'CLINICAL_DATE', 'OBSERVATION'] },
+        type: {
+          type: 'string',
+          enum: ['DIAGNOSIS', 'SYMPTOM', 'MEDICATION', 'PROCEDURE', 'CLINICAL_DATE', 'OBSERVATION'],
+        },
         value: { type: 'string' },
         normalizedValue: { type: 'string', nullable: true },
       },

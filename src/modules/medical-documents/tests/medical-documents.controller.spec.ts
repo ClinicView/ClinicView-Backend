@@ -84,7 +84,7 @@ describe('MedicalDocumentsController', () => {
     const response = makeResponse();
     mockService.upload.mockResolvedValue(response);
     const result = await controller.upload('patient-uuid', mockFile, req);
-    expect(mockService.upload).toHaveBeenCalledWith('patient-uuid', mockFile, 'user-uuid');
+    expect(mockService.upload).toHaveBeenCalledWith('patient-uuid', mockFile, 'user-uuid', {});
     expect(result.id).toBe('doc-uuid');
   });
 
@@ -144,18 +144,16 @@ describe('MedicalDocumentsController', () => {
     const response = makeResponse({ status: DocumentStatus.VALIDATED });
     mockService.validate.mockResolvedValue(response);
     const result = await controller.validate('patient-uuid', 'doc-uuid', dto, req);
-    expect(mockService.validate).toHaveBeenCalledWith(
-      'patient-uuid',
-      'doc-uuid',
-      dto,
-      'user-uuid',
-    );
+    expect(mockService.validate).toHaveBeenCalledWith('patient-uuid', 'doc-uuid', dto, 'user-uuid');
     expect(result.status).toBe(DocumentStatus.VALIDATED);
   });
 
   it('saveCorrection delega en el servicio', async () => {
     const dto = { expectedVersion: 0, correctedText: 'texto corregido', correctedEntities: [] };
-    const response = makeResponse({ status: DocumentStatus.PROCESSED, correctedText: 'texto corregido' });
+    const response = makeResponse({
+      status: DocumentStatus.PROCESSED,
+      correctedText: 'texto corregido',
+    });
     mockService.saveCorrection.mockResolvedValue(response);
 
     const result = await controller.saveCorrection('patient-uuid', 'doc-uuid', dto, req);
@@ -170,7 +168,10 @@ describe('MedicalDocumentsController', () => {
   });
 
   it('reject delega en el servicio con el motivo', async () => {
-    const response = makeResponse({ status: DocumentStatus.REJECTED, rejectReason: 'Documento ilegible por mala calidad.' });
+    const response = makeResponse({
+      status: DocumentStatus.REJECTED,
+      rejectReason: 'Documento ilegible por mala calidad.',
+    });
     mockService.reject.mockResolvedValue(response);
     const result = await controller.reject(
       'patient-uuid',

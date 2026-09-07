@@ -40,6 +40,7 @@ import { FindDocumentsQueryDto } from './dto/find-documents-query.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
 import { SearchDocumentsQueryDto } from './dto/search-documents-query.dto';
 import { ValidateDocumentDto } from './dto/validate-document.dto';
+import { ClinicalDocumentKind, DocumentClinicalMetadataDto } from './dto/document-metadata.dto';
 
 const DEFAULT_UPLOAD_MAX_SIZE_MB = 20;
 
@@ -52,9 +53,8 @@ function getUploadMaxSizeBytes(): number {
     process.env.UPLOAD_MAX_SIZE_MB ?? String(DEFAULT_UPLOAD_MAX_SIZE_MB),
     10,
   );
-  const sizeMb = Number.isFinite(configured) && configured > 0
-    ? configured
-    : DEFAULT_UPLOAD_MAX_SIZE_MB;
+  const sizeMb =
+    Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_UPLOAD_MAX_SIZE_MB;
   return sizeMb * 1024 * 1024;
 }
 
@@ -72,27 +72,42 @@ export class MedicalDocumentsController {
     resourceFromResponseId: true,
   })
   @RequirePermissions('documents.upload')
-  @UseInterceptors(FileInterceptor('file', {
-    storage: memoryStorage(),
-    limits: { fileSize: getUploadMaxSizeBytes() },
-  }))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: getUploadMaxSizeBytes() },
+    }),
+  )
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
       type: 'object',
-      properties: { file: { type: 'string', format: 'binary' } },
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        documentKind: { type: 'string', enum: Object.values(ClinicalDocumentKind) },
+        clinicalDate: { type: 'string', format: 'date' },
+        clinicalEndDate: { type: 'string', format: 'date' },
+        sourceInstitution: { type: 'string', maxLength: 200 },
+        sourceService: { type: 'string', maxLength: 150 },
+        originalProfessional: { type: 'string', maxLength: 200 },
+        pageCount: { type: 'integer', minimum: 1, maximum: 5000 },
+        sourceNotes: { type: 'string', maxLength: 1000 },
+      },
       required: ['file'],
     },
   })
-  @ApiOperation({ summary: 'Subir documento medico (PDF, JPEG, PNG; maximo configurable por UPLOAD_MAX_SIZE_MB)' })
+  @ApiOperation({
+    summary: 'Subir documento medico (PDF, JPEG, PNG; maximo configurable por UPLOAD_MAX_SIZE_MB)',
+  })
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 201, type: DocumentResponseDto })
   upload(
     @Param('patientId', ParseUUIDPipe) patientId: string,
     @UploadedFile() file: Express.Multer.File,
     @Request() req: AuthRequest,
+    @Body() metadata: DocumentClinicalMetadataDto = {},
   ): Promise<DocumentResponseDto> {
-    return this.service.upload(patientId, file, req.user.sub);
+    return this.service.upload(patientId, file, req.user.sub, metadata);
   }
 
   @Get()
@@ -108,7 +123,9 @@ export class MedicalDocumentsController {
 
   @Get('search')
   @RequirePermissions('documents.read')
-  @ApiOperation({ summary: 'Buscar por palabra clave en el texto OCR/corregido de los documentos del paciente' })
+  @ApiOperation({
+    summary: 'Buscar por palabra clave en el texto OCR/corregido de los documentos del paciente',
+  })
   @ApiParam({ name: 'patientId', type: 'string', format: 'uuid' })
   search(
     @Param('patientId', ParseUUIDPipe) patientId: string,
@@ -266,4 +283,3 @@ export class MedicalDocumentsController {
     return this.service.reject(patientId, id, dto, req.user.sub);
   }
 }
-

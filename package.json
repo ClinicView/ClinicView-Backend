@@ -15,6 +15,7 @@
     "test:cov": "jest --coverage",
     "test:e2e": "node ./scripts/run-e2e.js",
     "typecheck": "tsc --noEmit",
+    "gen:openapi": "ts-node --project tsconfig.json scripts/export-openapi.ts openapi.generated.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",

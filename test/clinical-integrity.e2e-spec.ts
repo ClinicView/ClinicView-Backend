@@ -201,9 +201,11 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     bytes: Buffer,
     filename: string,
     mimeType: string,
+    metadata: Record<string, string> = {},
   ) {
     const form = new FormData();
     form.append('file', new Blob([new Uint8Array(bytes)], { type: mimeType }), filename);
+    for (const [key, value] of Object.entries(metadata)) form.append(key, value);
     return jsonRequest<T>(baseUrl, path, {
       method: 'POST',
       headers: {
@@ -296,19 +298,8 @@ describe('Integridad clínica real y aislada (e2e)', () => {
 
   afterAll(async () => {
     await app?.close();
-    if (patientId) {
-      await prisma.clinicalRecordAttachment.deleteMany({
-        where: { clinicalRecord: { patientId } },
-      });
-      await prisma.clinicalRecordDraft.deleteMany({ where: { patientId } });
-      await prisma.clinicalRecord.deleteMany({
-        where: { patientId, parentRecordId: { not: null } },
-      });
-      await prisma.clinicalRecord.deleteMany({ where: { patientId } });
-      await prisma.clinicalMediaAsset.deleteMany({ where: { patientId } });
-      await prisma.medicalDocument.deleteMany({ where: { patientId } });
-      await prisma.patient.deleteMany({ where: { id: patientId } });
-    }
+    // Historical revisions deliberately reject row deletion. globalTeardown
+    // drops only the explicitly validated clinicview_e2e schema for both suites.
     await prisma?.$disconnect();
     const safeTempRoot = `${resolve(tmpdir())}${sep}`.toLowerCase();
     const resolvedUploadDir = resolve(uploadDir ?? '');
@@ -1240,6 +1231,109 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     expect(
       await prisma.patientClinicalSummaryRevision.count({ where: { patientId: patient.id } }),
     ).toBe(2);
+  });
+
+  it('conserva procedencia clínica, rechaza fechas inválidas y protege correcciones concurrentes', async () => {
+    const invalid = await uploadMultipart<unknown>(
+      `/api/patients/${patientId}/documents`,
+      clinicianToken,
+      VALID_PDF,
+      'fecha-invalida.pdf',
+      'application/pdf',
+      { clinicalDate: '2023-02-30' },
+    );
+    expect(invalid.response.status).toBe(400);
+    const created = await uploadMultipart<{
+      id: string;
+      version: number;
+      clinicalMetadata: { clinicalDate: string; pageCount: number };
+    }>(
+      `/api/patients/${patientId}/documents`,
+      clinicianToken,
+      VALID_PDF,
+      'procedencia-demo.pdf',
+      'application/pdf',
+      {
+        clinicalDate: '2023-09-27',
+        documentKind: 'CLINICAL_HISTORY',
+        pageCount: '2',
+        sourceInstitution: 'Institución sintética E2E',
+      },
+    );
+    expect(created.response.status).toBe(201);
+    expect(created.body.clinicalMetadata).toMatchObject({
+      clinicalDate: '2023-09-27',
+      pageCount: 2,
+    });
+    const path = `/api/patients/${patientId}/documents/${created.body.id}/metadata`;
+    const payload = {
+      expectedVersion: created.body.version,
+      metadata: { clinicalDate: '2023-09-28', clinicalEndDate: '2023-10-04', pageCount: 2 },
+      reason: CLINICAL_E2E_PHI.recordNotes,
+    };
+    const denied = await jsonRequest<unknown>(baseUrl, path, {
+      method: 'PATCH',
+      headers: jsonHeaders(readerToken),
+      body: JSON.stringify(payload),
+    });
+    expect(denied.response.status).toBe(403);
+    const race = await Promise.all(
+      [clinicianToken, peerToken].map((token) =>
+        jsonRequest<{ version: number }>(baseUrl, path, {
+          method: 'PATCH',
+          headers: jsonHeaders(token),
+          body: JSON.stringify(payload),
+        }),
+      ),
+    );
+    expect(race.map((r) => r.response.status).sort()).toEqual([200, 409]);
+    const history = await jsonRequest<{
+      data: Array<{ version: number; metadata: { clinicalDate: string } }>;
+      nextBeforeVersion: number | null;
+    }>(baseUrl, `${path}/history`, { headers: jsonHeaders(readerToken) });
+    expect(history.response.status).toBe(200);
+    expect(history.body.data.map((r) => r.metadata.clinicalDate)).toEqual([
+      '2023-09-28',
+      '2023-09-27',
+    ]);
+    const wrongPatient = await jsonRequest<unknown>(
+      baseUrl,
+      `/api/patients/ba6d1c31-c7fc-4742-98ee-1a7b4d880385/documents/${created.body.id}/metadata/history`,
+      { headers: jsonHeaders(readerToken) },
+    );
+    expect(wrongPatient.response.status).toBe(404);
+    const exported = await jsonRequest<{
+      documents: Array<{
+        id: string;
+        clinicalMetadata: { clinicalDate: string };
+        metadataRevisions: unknown[];
+      }>;
+    }>(baseUrl, `/api/patients/${patientId}/clinical-history/export`, {
+      headers: jsonHeaders(readerToken),
+    });
+    const document = exported.body.documents.find((item) => item.id === created.body.id);
+    expect(document?.clinicalMetadata.clinicalDate).toBe('2023-09-28');
+    expect(document?.metadataRevisions).toHaveLength(2);
+  });
+
+  it('protege las revisiones clínicas frente a UPDATE y DELETE en la base de pruebas', async () => {
+    const summary = await prisma.patientClinicalSummaryRevision.findFirstOrThrow();
+    const metadata = await prisma.documentMetadataRevision.findFirstOrThrow();
+    await expect(
+      prisma.patientClinicalSummaryRevision.update({
+        where: { id: summary.id },
+        data: { reason: 'Intento de reemplazo indebido' },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.documentMetadataRevision.delete({ where: { id: metadata.id } }),
+    ).rejects.toThrow();
+    expect(
+      await prisma.patientClinicalSummaryRevision.findUnique({ where: { id: summary.id } }),
+    ).toEqual(summary);
+    expect(
+      await prisma.documentMetadataRevision.findUnique({ where: { id: metadata.id } }),
+    ).toEqual(metadata);
   });
 
   it('no persiste PHI de payloads clínicos en la bitácora', async () => {

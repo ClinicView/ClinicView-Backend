@@ -25,6 +25,7 @@ import {
 import { UpdatePatientDto } from './dto/update-patient.dto';
 import { normalizePatientContext } from './dto/patient-context.dto';
 import { ClinicalSummaryPayloadDto } from './dto/clinical-summary.dto';
+import { DocumentClinicalMetadataDto } from '../medical-documents/dto/document-metadata.dto';
 import { PatientsRepository } from './repositories/patients.repository';
 
 export interface PaginatedResponse<T> {
@@ -284,6 +285,11 @@ export class PatientsService {
         return {
           id: document.id,
           originalName: document.originalName,
+          clinicalMetadata: (document.clinicalMetadata ?? {}) as DocumentClinicalMetadataDto,
+          metadataRevisions: (document.metadataRevisions ?? []).map((revision) => ({
+            ...revision,
+            metadata: revision.metadata as DocumentClinicalMetadataDto,
+          })),
           mimeType: document.mimeType,
           sizeBytes: document.sizeBytes,
           status: document.status,

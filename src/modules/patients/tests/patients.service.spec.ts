@@ -367,6 +367,8 @@ describe('PatientsService', () => {
       medicalDocuments: [
         {
           id: 'document-validated',
+          clinicalMetadata: {},
+          metadataRevisions: [],
           originalName: 'validado.pdf',
           mimeType: 'application/pdf',
           sizeBytes: 1024,
@@ -387,6 +389,8 @@ describe('PatientsService', () => {
         },
         {
           id: 'document-pending-review',
+          clinicalMetadata: {},
+          metadataRevisions: [],
           originalName: 'sin-validar.pdf',
           mimeType: 'application/pdf',
           sizeBytes: 2048,

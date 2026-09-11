@@ -49,29 +49,53 @@ PENDING ──process──▶ PROCESSING ──OCR ok──▶ PROCESSED ──
 5. **Búsqueda** — `GET .../documents/search?q=` busca por palabra clave en
    `ocrText`/`correctedText`/`originalName` y devuelve snippets con contexto.
 
-## Ciclo de fine-tuning
+## Exportación legacy y entrenamiento futuro
 
-Las correcciones humanas alimentan el reentrenamiento de TrOCR:
+El exportador de texto **no genera automáticamente pares fiables para entrenar**.
+Si algún documento candidato tiene una ejecución OCR espacial, el comando falla
+sin escribir ni modificar archivos. Una corrección espacial puede haber cambiado
+el orden, unido/dividido líneas o ajustado el recorte: emparejar por posición con
+las imágenes antiguas produciría etiquetas incorrectas.
 
 ```bash
-# 1. Exportar correcciones (documentos con correctedText):
+# Bloquea la salida si hay candidatos con ejecuciones espaciales:
 node scripts/export-corrections.js
-#    → iav2/data/annotations/webapp_corrections_export.jsonl
 
-# 2. En iav2/: alinear con los recortes persistidos y entrenar
-#    (ver iav2/docs/PIPELINE.md, sección "Ciclo de mejora")
+# Opción explícita: excluir TODOS los documentos con ejecuciones espaciales:
+node scripts/export-corrections.js --legacy-only ruta-privada/export-legacy.jsonl
+
+# Pruebas sintéticas del guard (no consultan la base ni exportan historias):
+node --test scripts/export-corrections.test.js
 ```
 
-El worker IA v2 guarda los recortes de línea de cada documento procesado en
-`iav2/data/webapp_lines/<documentId>/` — ese `documentId` es el UUID de
-`medical_documents`, lo que permite emparejar recorte ↔ corrección.
+Sin ruta explícita, la salida se resuelve al repositorio hermano
+`ClinicView-IA-v2/data/annotations/webapp_corrections_export.jsonl`.
+`--legacy-only` informa cuántos documentos excluyó; no autoriza a exportar líneas
+espaciales ni las transforma a un formato antiguo. Los registros legacy incluyen
+`alignmentVerified:false` y `trainingReady:false`. El estado `VALIDATED` tampoco
+demuestra, por sí solo, que cada imagen coincida con su etiqueta de entrenamiento.
+
+Se eliminó `patientCode`/documento de identidad del export. Esto **no anonimiza**
+el texto clínico ni el nombre del archivo: la salida sigue siendo privada y no
+debe subirse a Git, publicarse o enviarse automáticamente a servicios externos.
+
+El constructor antiguo de IA utiliza el `lines.jsonl` raíz (última ejecución) y
+alineación textual heurística. No conoce `runId`, revisiones, cambios de geometría
+ni procedencia; no debe recibir correcciones espaciales, tampoco exports antiguos
+ya existentes. El guard no modifica ni elimina exports generados anteriormente.
+
+Un futuro exportador espacial deberá fijar `runId` y revisión, reconstruir los
+recortes desde la página preservada usando la geometría humana, comprobar que las
+líneas estén revisadas y vigentes, conservar la procedencia de uniones/divisiones,
+y separar documentos/pacientes entre entrenamiento y evaluación sin fuga de datos.
+Ese exportador y el entrenamiento todavía no forman parte de este cambio.
 
 ## Scripts disponibles (`backend/scripts/`)
 
 | Script | Uso |
 |---|---|
 | `seed-demo.js` | Crea 4 pacientes de demostración con registros, documentos, PDF en storage y métricas. Idempotente. |
-| `export-corrections.js` | Exporta correcciones para el dataset de fine-tuning. |
+| `export-corrections.js` | Export privado legacy con guard contra ejecuciones espaciales; alineación no verificada. |
 
 ## Variables de entorno relevantes
 

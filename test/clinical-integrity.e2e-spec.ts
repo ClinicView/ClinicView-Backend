@@ -2056,7 +2056,29 @@ describe('Integridad clínica real y aislada (e2e)', () => {
         height: 2,
         coordinateSpace: 'preprocessed_page',
         lines: [
-          { lineId: 'line_1', bbox: [0, 0, 2, 1], text: 'OCR uno', order: 1 },
+          {
+            lineId: 'line_1',
+            bbox: [0, 0, 2, 1],
+            text: 'OCR uno',
+            order: 1,
+            detectionBbox: [0, 0, 2, 1],
+            detectorIndex: 1,
+            rawPolygon: [
+              [-0.25, 0],
+              [2.25, 0],
+              [2.25, 1],
+              [-0.25, 1],
+            ],
+            cropProvenance: {
+              policy: 'neighbor_padding_v1',
+              originalPaddedBbox: [0, 0, 2, 2],
+              requestedPaddingPx: 1,
+              appliedPaddingPx: [0, 0, 0, 0],
+              adjustedSides: ['bottom'],
+              neighborLineIds: ['line_2'],
+              overlappingLineIds: [],
+            },
+          },
           { lineId: 'line_2', bbox: [0, 1, 2, 2], text: 'OCR dos', order: 2 },
         ],
       },
@@ -2091,6 +2113,21 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     ).toBe(404);
     const current = await get(readerToken);
     expect(current.body).toMatchObject({ runId, review: null, pages: [{ imageAvailable: true }] });
+    expect(current.body).toMatchObject({
+      pages: [
+        {
+          lines: [
+            {
+              detectorIndex: 1,
+              bbox: [0, 0, 2, 1],
+              detectionBbox: [0, 0, 2, 1],
+              cropProvenance: { policy: 'neighbor_padding_v1', adjustedSides: ['bottom'] },
+            },
+            {},
+          ],
+        },
+      ],
+    });
     expect(JSON.stringify(current.body)).not.toContain('storagePath');
     const imagePath = `${path}/pages/1/image?runId=${runId}`;
     const image = await fetch(`${baseUrl}${imagePath}`, { headers: jsonHeaders(readerToken) });
@@ -2110,7 +2147,9 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     const lines = layout.pages[0].lines.map((line) => ({
       lineId: line.lineId,
       page: 1,
-      bbox: line.bbox,
+      // Human geometry may shrink a source detector (e.g. a manual split).
+      // It must not inherit the machine-only crop containment restriction.
+      bbox: line.lineId === 'line_1' ? [0, 0, 1, 1] : line.bbox,
       text: `Revisado ${line.order}`,
       order: line.order,
       reviewed: true,

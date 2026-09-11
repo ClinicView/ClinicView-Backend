@@ -52,6 +52,15 @@ Returns:
       polygon: number[][]; regionId: string | null; order: number;
       confidence: number | null; detectionConfidence: number | null;
       recognitionStatus: string; warnings: string[];
+      detectorIndex?: number; rawPolygon?: number[][];
+      cropProvenance?: {
+        policy: 'fixed_padding' | 'neighbor_padding_v1';
+        originalPaddedBbox: [number, number, number, number];
+        requestedPaddingPx: number;
+        appliedPaddingPx: [number, number, number, number]; // left, top, right, bottom
+        adjustedSides: Array<'left' | 'top' | 'right' | 'bottom'>;
+        neighborLineIds: string[]; overlappingLineIds: string[];
+      };
     }>;
   }>;
   review: null | {
@@ -71,6 +80,38 @@ Returns:
 `pages[].lines` always contains original machine data; a review never replaces
 these lines. No filesystem paths, internal URLs or internal keys are exposed.
 Confidence/warnings are model signals, not measured completeness or clinical accuracy.
+
+#### Conservative crop-policy provenance (optional, additive)
+
+`bbox` remains the actual machine crop on the preserved preprocessed image;
+`detectionBbox` and `polygon` remain the detector's clipped geometry. Consumers
+must not add padding again or substitute `originalPaddedBbox` for the actual crop.
+`rawPolygon`, when supplied, is the detector polygon **before** page clipping and
+may extend outside the page. `detectorIndex` is zero-based detector input order,
+not the final reading order. No field is synthesized for historical runs.
+
+`cropProvenance` explains the margin-only policy. `originalPaddedBbox` is the
+page-clamped fixed-padding baseline. The backend checks that the actual crop
+contains the detector box, stays within that baseline, has exactly the stated
+per-side padding, and names exactly the adjusted sides in left/top/right/bottom
+order. Neighbor/overlap IDs must be unique other machine lines on the same page.
+Padding is an integer in 0–50,000; each reference list has at most 500 IDs.
+Raw polygons have at most 64 finite two-coordinate points with absolute
+coordinates at most 1,000,000; detector indices are integers in 0–1,000,000.
+
+Invalid optional metadata is omitted with an explicit review warning, **not** by
+discarding the line, its text, or its original coordinates. A machine crop that
+clips its detector receives `machine_crop_clips_detection_requires_review`;
+the backend never quietly repairs or shrinks detector geometry. Remaining
+overlaps/possible duplicate detections also require review; they are not removed
+automatically. Fewer padding overlaps is not evidence of complete digitization.
+
+The immutable machine-layout JSON stores these optional values with its run.
+No migration, backfill, historical run rewrite or correction rewrite is required.
+Reading stored history does not re-normalize it with today's policy. Human
+regions and splits may legitimately be smaller than original detections: the
+machine crop-containment rule is **not** a restriction on human review geometry.
+The existing run/version guards and append-only revisions remain unchanged.
 
 ### `PATCH /ocr-layout/review` — `documents.validate`
 

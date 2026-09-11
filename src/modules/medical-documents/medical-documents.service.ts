@@ -14,6 +14,7 @@ import {
 import { DocumentStatus, MedicalDocument, Prisma } from '@prisma/client';
 import { IaClientService } from '../../core/ia/ia-client.service';
 import { StorageService } from '../../core/storage/storage.service';
+import { OcrLayoutService } from './ocr-layout.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CorrectDocumentDto } from './dto/correct-document.dto';
 import { DocumentResponseDto } from './dto/document-response.dto';
@@ -140,6 +141,7 @@ export class MedicalDocumentsService implements OnModuleInit {
     private readonly storage: StorageService,
     private readonly iaClient: IaClientService,
     private readonly notifications: NotificationsService,
+    private readonly layouts: OcrLayoutService,
   ) {}
 
   /**
@@ -259,65 +261,91 @@ export class MedicalDocumentsService implements OnModuleInit {
       throw new ConflictException(`No se puede procesar un documento con estado ${doc.status}.`);
     }
 
-    const processing = await this.repo.updateStatus(id, DocumentStatus.PROCESSING, {
-      ...(userId && { updatedBy: userId }),
-    });
+    const processing = await this.repo.claimProcessing(id, patientId, doc.version, userId);
+    if (!processing) throw new ConflictException('El documento ya cambió o está siendo procesado.');
 
     // El OCR puede tardar minutos: se ejecuta en segundo plano y se notifica
     // al usuario al terminar. La respuesta vuelve de inmediato (PROCESSING).
-    void this.runProcessing(doc, userId);
+    void this.runProcessing(doc, processing.version, userId);
 
     return this.toResponse(processing);
   }
 
-  private async runProcessing(doc: MedicalDocument, userId?: string): Promise<void> {
+  private async runProcessing(
+    doc: MedicalDocument,
+    processingVersion: number,
+    userId?: string,
+  ): Promise<void> {
     const { id, patientId } = doc;
     try {
       const allowedMime = doc.mimeType as 'image/jpeg' | 'image/png' | 'application/pdf';
       const fileBytes = await this.storage.readFile(doc.storagePath);
       const result = await this.iaClient.process(id, fileBytes, allowedMime);
 
-      await this.repo.updateStatus(id, DocumentStatus.PROCESSED, {
-        ocrText: result.ocrText,
-        nerEntities: result.entities as unknown as Prisma.InputJsonValue,
-        ...(result.metrics && {
-          metrics: result.metrics as unknown as Prisma.InputJsonValue,
-        }),
-        ocrConfidence: result.ocrConfidence,
-        confidenceLevel: result.confidenceLevel,
-        processedAt: new Date(),
-        ...(userId && { updatedBy: userId }),
-      });
+      if (result.layout) {
+        await this.layouts.completeProcessing(
+          id,
+          patientId,
+          processingVersion,
+          { ...result, layout: result.layout },
+          userId,
+        );
+      } else {
+        const completed = await this.repo.finishProcessing(
+          id,
+          patientId,
+          processingVersion,
+          DocumentStatus.PROCESSED,
+          {
+            ocrText: result.ocrText,
+            nerEntities: result.entities as unknown as Prisma.InputJsonValue,
+            ...(result.metrics && {
+              metrics: result.metrics as unknown as Prisma.InputJsonValue,
+            }),
+            ocrConfidence: result.ocrConfidence,
+            confidenceLevel: result.confidenceLevel,
+            processedAt: new Date(),
+            ...(userId && { updatedBy: userId }),
+          },
+        );
+        if (!completed) return;
+      }
 
       if (userId) {
-        await this.notifications.notify({
-          userId,
-          type: 'DOCUMENT_PROCESSED',
-          title: 'Digitalización completada',
-          body: `«${doc.originalName}» ya tiene texto OCR y está listo para corregir.`,
-          patientId,
-          documentId: id,
-        });
+        await this.notifications
+          .notify({
+            userId,
+            type: 'DOCUMENT_PROCESSED',
+            title: 'Digitalización completada',
+            body: `«${doc.originalName}» ya tiene texto OCR y está listo para corregir.`,
+            patientId,
+            documentId: id,
+          })
+          .catch(() => this.logger.warn('No se pudo enviar la notificación de OCR completado.'));
       }
     } catch (err) {
       this.logger.error(`Error procesando documento ${id}: ${String(err)}`);
-      await this.repo
-        .updateStatus(id, DocumentStatus.FAILED, {
+      const failed = await this.repo
+        .finishProcessing(id, patientId, processingVersion, DocumentStatus.FAILED, {
           ...(userId && { updatedBy: userId }),
         })
         .catch((updateErr) =>
           this.logger.error(`No se pudo marcar FAILED el documento ${id}: ${String(updateErr)}`),
         );
 
+      if (!failed) return;
+
       if (userId) {
-        await this.notifications.notify({
-          userId,
-          type: 'DOCUMENT_FAILED',
-          title: 'Error en la digitalización',
-          body: `«${doc.originalName}» no pudo procesarse. Puedes reintentar desde el documento.`,
-          patientId,
-          documentId: id,
-        });
+        await this.notifications
+          .notify({
+            userId,
+            type: 'DOCUMENT_FAILED',
+            title: 'Error en la digitalización',
+            body: `«${doc.originalName}» no pudo procesarse. Puedes reintentar desde el documento.`,
+            patientId,
+            documentId: id,
+          })
+          .catch(() => this.logger.warn('No se pudo enviar la notificación del fallo OCR.'));
       }
     }
   }

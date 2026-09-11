@@ -482,12 +482,50 @@ model MedicalDocument {
   assignedReviewer User?   @relation("MedicalDocumentAssignedReviewer", fields: [assignedReviewerId], references: [id], onDelete: Restrict)
   metadataRevisions DocumentMetadataRevision[]
   sourcedRecords ClinicalRecordSource[]
+  ocrRuns DocumentOcrRun[]
 
   @@index([patientId, createdAt(sort: Desc)])
   @@index([status])
   @@index([status, reviewPriority, processedAt])
   @@index([assignedReviewerId, status])
   @@map("medical_documents")
+}
+
+// Original machine output and every spatial correction are append-only.
+// Image binaries are held in private storage, never public URLs or database blobs.
+model DocumentOcrRun {
+  id String @id @default(uuid()) @db.Uuid
+  documentId String @map("document_id") @db.Uuid
+  runId String @map("run_id") @db.VarChar(120)
+  schemaVersion Int @default(1) @map("schema_version")
+  machineLayout Json @map("machine_layout")
+  pageImages Json @map("page_images")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  document MedicalDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  revisions DocumentOcrReviewRevision[]
+
+  @@unique([documentId, runId])
+  @@index([documentId, createdAt(sort: Desc)])
+  @@map("document_ocr_runs")
+}
+
+model DocumentOcrReviewRevision {
+  id String @id @default(uuid()) @db.Uuid
+  ocrRunId String @map("ocr_run_id") @db.Uuid
+  revision Int
+  documentVersion Int @map("document_version")
+  lines Json
+  correctedText String @map("corrected_text")
+  previousCorrection Json @map("previous_correction")
+  reason String? @db.VarChar(500)
+  recordedBy String @map("recorded_by") @db.Uuid
+  recordedByUsername String @map("recorded_by_username") @db.VarChar(50)
+  recordedByName String @map("recorded_by_name")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  run DocumentOcrRun @relation(fields: [ocrRunId], references: [id], onDelete: Restrict)
+
+  @@unique([ocrRunId, revision])
+  @@map("document_ocr_review_revisions")
 }
 
 model DocumentMetadataRevision {

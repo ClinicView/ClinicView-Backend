@@ -34,6 +34,15 @@ export default () => ({
   },
   ia: {
     internalUrl: process.env.IA_INTERNAL_URL ?? 'http://ia:8000',
+    internalApiKey: process.env.IA_INTERNAL_API_KEY,
+    processTimeoutMs: boundedInteger(process.env.IA_PROCESS_TIMEOUT_MS, 1800000, 10000, 7200000),
+    imageTimeoutMs: boundedInteger(process.env.IA_IMAGE_TIMEOUT_MS, 30000, 1000, 120000),
+    maxPageImageBytes: boundedInteger(
+      process.env.IA_MAX_PAGE_IMAGE_BYTES,
+      26214400,
+      1024,
+      104857600,
+    ),
   },
   storage: {
     uploadDir: process.env.UPLOAD_DIR ?? './uploads',

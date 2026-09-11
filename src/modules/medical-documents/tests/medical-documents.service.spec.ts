@@ -10,6 +10,7 @@ import { IaClientService } from '../../../core/ia/ia-client.service';
 import { StorageService } from '../../../core/storage/storage.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { MedicalDocumentsService } from '../medical-documents.service';
+import { OcrLayoutService } from '../ocr-layout.service';
 import { MedicalDocumentsRepository } from '../repositories/medical-documents.repository';
 
 const makeDoc = (overrides: Record<string, unknown> = {}) => ({
@@ -68,6 +69,8 @@ const mockRepo = {
   findByPatient: jest.fn(),
   findByIdAndPatient: jest.fn(),
   updateStatus: jest.fn(),
+  claimProcessing: jest.fn(),
+  finishProcessing: jest.fn(),
   saveCorrection: jest.fn(),
   validateWithCorrection: jest.fn(),
   rejectReviewedVersion: jest.fn(),
@@ -86,6 +89,8 @@ const mockStorage = {
 
 const mockIaClient = {
   process: jest.fn(),
+  getPageImage: jest.fn(),
+  onModuleDestroy: jest.fn(),
 } satisfies Record<keyof IaClientService, jest.Mock>;
 
 const mockNotifications = {
@@ -106,6 +111,7 @@ describe('MedicalDocumentsService', () => {
         { provide: StorageService, useValue: mockStorage },
         { provide: IaClientService, useValue: mockIaClient },
         { provide: NotificationsService, useValue: mockNotifications },
+        { provide: OcrLayoutService, useValue: { completeProcessing: jest.fn() } },
       ],
     }).compile();
 
@@ -113,6 +119,8 @@ describe('MedicalDocumentsService', () => {
     jest.clearAllMocks();
     // Por defecto el paciente está activo; los tests de inactivo lo sobreescriben.
     mockRepo.isPatientActive.mockResolvedValue(true);
+    mockRepo.finishProcessing.mockResolvedValue(true);
+    mockNotifications.notify.mockResolvedValue(undefined);
   });
 
   describe('upload', () => {
@@ -218,9 +226,11 @@ describe('MedicalDocumentsService', () => {
     it('devuelve PROCESSING de inmediato y completa a PROCESSED en segundo plano', async () => {
       const doc = makeDoc();
       mockRepo.findByIdAndPatient.mockResolvedValue(doc);
-      mockRepo.updateStatus
-        .mockResolvedValueOnce({ ...doc, status: DocumentStatus.PROCESSING })
-        .mockResolvedValueOnce({ ...doc, status: DocumentStatus.PROCESSED, ocrText: 'texto extraído' });
+      mockRepo.claimProcessing.mockResolvedValue({
+        ...doc,
+        status: DocumentStatus.PROCESSING,
+        version: 1,
+      });
 
       mockIaClient.process.mockResolvedValue({
         ocrText: 'texto extraído',
@@ -234,16 +244,19 @@ describe('MedicalDocumentsService', () => {
 
       // La respuesta HTTP es inmediata, con el documento en PROCESSING.
       expect(result.status).toBe(DocumentStatus.PROCESSING);
-      expect(mockRepo.updateStatus).toHaveBeenCalledWith(
+      expect(mockRepo.claimProcessing).toHaveBeenCalledWith(
         'doc-uuid',
-        DocumentStatus.PROCESSING,
-        expect.anything(),
+        'patient-uuid',
+        0,
+        'user-uuid',
       );
 
       // El trabajo en segundo plano actualiza a PROCESSED y notifica.
       await new Promise(process.nextTick);
-      expect(mockRepo.updateStatus).toHaveBeenCalledWith(
+      expect(mockRepo.finishProcessing).toHaveBeenCalledWith(
         'doc-uuid',
+        'patient-uuid',
+        1,
         DocumentStatus.PROCESSED,
         expect.objectContaining({ ocrText: 'texto extraído' }),
       );
@@ -255,9 +268,11 @@ describe('MedicalDocumentsService', () => {
     it('marca FAILED y notifica cuando el worker de IA falla', async () => {
       const doc = makeDoc();
       mockRepo.findByIdAndPatient.mockResolvedValue(doc);
-      mockRepo.updateStatus
-        .mockResolvedValueOnce({ ...doc, status: DocumentStatus.PROCESSING })
-        .mockResolvedValueOnce({ ...doc, status: DocumentStatus.FAILED });
+      mockRepo.claimProcessing.mockResolvedValue({
+        ...doc,
+        status: DocumentStatus.PROCESSING,
+        version: 1,
+      });
 
       mockIaClient.process.mockRejectedValue(new Error('IA no disponible'));
 
@@ -265,8 +280,10 @@ describe('MedicalDocumentsService', () => {
       expect(result.status).toBe(DocumentStatus.PROCESSING);
 
       await new Promise(process.nextTick);
-      expect(mockRepo.updateStatus).toHaveBeenCalledWith(
+      expect(mockRepo.finishProcessing).toHaveBeenCalledWith(
         'doc-uuid',
+        'patient-uuid',
+        1,
         DocumentStatus.FAILED,
         expect.anything(),
       );
@@ -280,9 +297,7 @@ describe('MedicalDocumentsService', () => {
     const validationDto = {
       expectedVersion: 0,
       correctedText: ' texto final revisado ',
-      correctedEntities: [
-        { type: 'DIAGNOSIS', value: ' Hipertensión ', normalizedValue: ' HTA ' },
-      ],
+      correctedEntities: [{ type: 'DIAGNOSIS', value: ' Hipertensión ', normalizedValue: ' HTA ' }],
       checklistItems: ['text', 'entities', 'sections', 'phi'],
       attested: true as const,
     };
@@ -301,12 +316,7 @@ describe('MedicalDocumentsService', () => {
       mockRepo.findByIdAndPatient.mockResolvedValue(doc);
       mockRepo.validateWithCorrection.mockResolvedValue(validated);
 
-      const result = await service.validate(
-        'patient-uuid',
-        'doc-uuid',
-        validationDto,
-        'user-uuid',
-      );
+      const result = await service.validate('patient-uuid', 'doc-uuid', validationDto, 'user-uuid');
       expect(mockRepo.validateWithCorrection).toHaveBeenCalledWith(
         'doc-uuid',
         'patient-uuid',
@@ -314,9 +324,7 @@ describe('MedicalDocumentsService', () => {
         'user-uuid',
         expect.objectContaining({
           correctedText: 'texto final revisado',
-          correctedEntities: [
-            { type: 'DIAGNOSIS', value: 'Hipertensión', normalizedValue: 'HTA' },
-          ],
+          correctedEntities: [{ type: 'DIAGNOSIS', value: 'Hipertensión', normalizedValue: 'HTA' }],
           correctedById: 'user-uuid',
           reviewedBy: 'user-uuid',
           validationChecklist: expect.objectContaining({
@@ -365,15 +373,18 @@ describe('MedicalDocumentsService', () => {
     });
 
     it('rechaza una atestación incompleta sin escribir cambios', async () => {
-      mockRepo.findByIdAndPatient.mockResolvedValue(
-        makeDoc({ status: DocumentStatus.PROCESSED }),
-      );
+      mockRepo.findByIdAndPatient.mockResolvedValue(makeDoc({ status: DocumentStatus.PROCESSED }));
 
       await expect(
-        service.validate('patient-uuid', 'doc-uuid', {
-          ...validationDto,
-          checklistItems: ['text', 'entities'],
-        }, 'user-uuid'),
+        service.validate(
+          'patient-uuid',
+          'doc-uuid',
+          {
+            ...validationDto,
+            checklistItems: ['text', 'entities'],
+          },
+          'user-uuid',
+        ),
       ).rejects.toThrow('Debe confirmar todos los puntos');
       expect(mockRepo.validateWithCorrection).not.toHaveBeenCalled();
     });
@@ -383,9 +394,7 @@ describe('MedicalDocumentsService', () => {
         makeDoc({
           status: DocumentStatus.PROCESSED,
           correctedText: 'texto final revisado',
-          correctedEntities: [
-            { type: 'DIAGNOSIS', value: 'Hipertensión', normalizedValue: 'HTA' },
-          ],
+          correctedEntities: [{ type: 'DIAGNOSIS', value: 'Hipertensión', normalizedValue: 'HTA' }],
           correctedAt: new Date('2026-09-01T10:00:00.000Z'),
           correctedById: 'original-corrector',
           assignedReviewerId: 'validator-user',
@@ -401,12 +410,7 @@ describe('MedicalDocumentsService', () => {
         makeDoc({ status: DocumentStatus.VALIDATED }),
       );
 
-      await service.validate(
-        'patient-uuid',
-        'doc-uuid',
-        validationDto,
-        'validator-user',
-      );
+      await service.validate('patient-uuid', 'doc-uuid', validationDto, 'validator-user');
 
       const validationData = mockRepo.validateWithCorrection.mock.calls[0][4];
       expect(validationData).not.toHaveProperty('correctedAt');
@@ -420,9 +424,9 @@ describe('MedicalDocumentsService', () => {
     });
 
     it('exige un actor autenticado para validar', async () => {
-      await expect(
-        service.validate('patient-uuid', 'doc-uuid', validationDto, ''),
-      ).rejects.toThrow(UnauthorizedException);
+      await expect(service.validate('patient-uuid', 'doc-uuid', validationDto, '')).rejects.toThrow(
+        UnauthorizedException,
+      );
       expect(mockRepo.findByIdAndPatient).not.toHaveBeenCalled();
     });
   });
@@ -473,10 +477,15 @@ describe('MedicalDocumentsService', () => {
     it('lanza ConflictException si el documento no esta PROCESSED', async () => {
       mockRepo.findByIdAndPatient.mockResolvedValue(makeDoc({ status: DocumentStatus.PENDING }));
       await expect(
-        service.saveCorrection('patient-uuid', 'doc-uuid', {
-          expectedVersion: 0,
-          correctedText: 'texto',
-        }, 'user-uuid'),
+        service.saveCorrection(
+          'patient-uuid',
+          'doc-uuid',
+          {
+            expectedVersion: 0,
+            correctedText: 'texto',
+          },
+          'user-uuid',
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -503,10 +512,15 @@ describe('MedicalDocumentsService', () => {
       mockRepo.saveCorrection.mockResolvedValue(null);
 
       await expect(
-        service.saveCorrection('patient-uuid', 'doc-uuid', {
-          expectedVersion: 0,
-          correctedText: 'texto',
-        }, 'user-uuid'),
+        service.saveCorrection(
+          'patient-uuid',
+          'doc-uuid',
+          {
+            expectedVersion: 0,
+            correctedText: 'texto',
+          },
+          'user-uuid',
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -525,7 +539,10 @@ describe('MedicalDocumentsService', () => {
   describe('reject', () => {
     it('rechaza un documento PROCESSED con motivo', async () => {
       const doc = makeDoc({ status: DocumentStatus.PROCESSED });
-      const rejected = makeDoc({ status: DocumentStatus.REJECTED, rejectReason: 'Documento ilegible por baja resolución.' });
+      const rejected = makeDoc({
+        status: DocumentStatus.REJECTED,
+        rejectReason: 'Documento ilegible por baja resolución.',
+      });
       mockRepo.findByIdAndPatient.mockResolvedValue(doc);
       mockRepo.rejectReviewedVersion.mockResolvedValue(rejected);
 

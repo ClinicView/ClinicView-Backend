@@ -1,5 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Agent } from 'undici';
+import { MachineOcrLayout, normalizeOcrLayout, OCR_IDENTIFIER } from './ocr-layout';
 
 export interface ExtractedEntity {
   type: 'DIAGNOSIS' | 'SYMPTOM' | 'MEDICATION' | 'PROCEDURE' | 'CLINICAL_DATE' | 'OBSERVATION';
@@ -33,6 +35,8 @@ export interface ProcessResult {
   metrics: OcrMetrics | null;
   ocrConfidence: number | null;
   confidenceLevel: ConfidenceLevel | null;
+  /** Additive: absent for legacy workers. Never infer page geometry from flat OCR. */
+  layout?: MachineOcrLayout | null;
 }
 
 /** Forma del campo metrics tal como lo emite el servicio IA v2 (snake_case). */
@@ -47,19 +51,47 @@ interface RawMetrics {
 }
 
 interface RawProcessResponse {
-  ocr: { text: string };
+  ocr: { text: string; pages?: unknown };
+  processingRunId?: string | null;
   entities: ExtractedEntity[];
   metrics?: RawMetrics | null;
   confidence?: { overall?: number; level?: string } | null;
 }
 
 @Injectable()
-export class IaClientService {
+export class IaClientService implements OnModuleDestroy {
   private readonly logger = new Logger(IaClientService.name);
   private readonly baseUrl: string;
+  private readonly processAgent: Agent;
+  private readonly processTimeoutMs: number;
 
   constructor(private readonly configService: ConfigService) {
     this.baseUrl = this.configService.get<string>('ia.internalUrl', 'http://ia:8000');
+    this.processTimeoutMs = this.configService.get<number>('ia.processTimeoutMs', 1800000);
+    if (
+      !Number.isSafeInteger(this.processTimeoutMs) ||
+      this.processTimeoutMs <= 0 ||
+      this.processTimeoutMs > 7200000
+    ) {
+      throw new Error('IA process timeout must be a positive, bounded duration.');
+    }
+    // A total AbortSignal does not replace Undici's independent 300 s defaults.
+    // Keep a private dispatcher: other HTTP clients retain their own policies.
+    this.processAgent = new Agent({
+      headersTimeout: this.processTimeoutMs,
+      bodyTimeout: this.processTimeoutMs,
+      connect: { timeout: Math.min(10000, this.processTimeoutMs) },
+      connections: 2,
+      pipelining: 1,
+      maxOrigins: 1,
+      allowH2: false,
+    });
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    // An application shutdown must release sockets, not wait up to 30 minutes.
+    // Deliberately abort pending requests; never automatically retry an OCR POST.
+    await this.processAgent.destroy();
   }
 
   async process(
@@ -75,21 +107,29 @@ export class IaClientService {
       options: { language: 'es', withEntities: true },
     });
 
-    const res = await fetch(`${this.baseUrl}/v1/process`, {
+    const endpoint = new URL(`${this.baseUrl.replace(/\/$/, '')}/v1/process`);
+    const res = await this.processAgent.request({
+      origin: endpoint.origin,
+      path: `${endpoint.pathname}${endpoint.search}`,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
+      headersTimeout: this.processTimeoutMs,
+      bodyTimeout: this.processTimeoutMs,
+      signal: AbortSignal.timeout(this.processTimeoutMs),
+      idempotent: false,
     });
 
-    if (!res.ok) {
-      const detail = await this.readErrorDetail(res);
+    // Agent.request has no redirect/retry interceptor: 3xx/5xx are not replayed.
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      const detail = await this.readErrorDetail(res.body);
       this.logger.warn(
-        `IA worker respondio ${res.status} para documento ${documentId}: ${detail}`,
+        `IA worker respondio ${res.statusCode} para documento ${documentId}: ${detail}`,
       );
-      throw new Error(`IA process failed with status ${res.status}: ${detail}`);
+      throw new Error(`IA process failed with status ${res.statusCode}: ${detail}`);
     }
 
-    const data = (await res.json()) as RawProcessResponse;
+    const data = (await res.body.json()) as RawProcessResponse;
 
     return {
       ocrText: data.ocr.text,
@@ -97,7 +137,65 @@ export class IaClientService {
       metrics: this.normalizeMetrics(data.metrics),
       ocrConfidence: typeof data.confidence?.overall === 'number' ? data.confidence.overall : null,
       confidenceLevel: this.normalizeLevel(data.confidence?.level),
+      layout: normalizeOcrLayout(data.processingRunId, data.ocr.pages),
     };
+  }
+
+  /** Internal-only fetch: no user supplied host/path, redirects or unbounded body. */
+  async getPageImage(documentId: string, runId: string, page: number): Promise<Buffer> {
+    if (
+      !OCR_IDENTIFIER.test(documentId) ||
+      !OCR_IDENTIFIER.test(runId) ||
+      !Number.isInteger(page) ||
+      page < 1
+    )
+      throw new Error('Invalid OCR artifact identifier.');
+    const key = this.configService.get<string>('ia.internalApiKey');
+    if (!key) throw new Error('IA internal artifact access is not configured.');
+    const response = await fetch(
+      `${this.baseUrl}/v1/artifacts/${encodeURIComponent(documentId)}/${encodeURIComponent(runId)}/pages/${page}/image`,
+      {
+        headers: { 'X-IA-Internal-Key': key },
+        redirect: 'error',
+        signal: AbortSignal.timeout(this.configService.get<number>('ia.imageTimeoutMs', 30000)),
+      },
+    );
+    if (!response.ok || response.headers.get('content-type')?.split(';')[0] !== 'image/png') {
+      await response.body?.cancel();
+      throw new Error(`OCR page image unavailable (${response.status}).`);
+    }
+    const maxBytes = this.configService.get<number>('ia.maxPageImageBytes', 26214400);
+    const declared = Number(response.headers.get('content-length'));
+    if (declared > maxBytes) {
+      await response.body?.cancel();
+      throw new Error('OCR page image exceeds the allowed size.');
+    }
+    if (!response.body) throw new Error('OCR page image is empty.');
+    const reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > maxBytes) throw new Error('OCR page image exceeds the allowed size.');
+        chunks.push(Buffer.from(value));
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => undefined);
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+    const buffer = Buffer.concat(chunks);
+    if (
+      buffer.length < 24 ||
+      !buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    ) {
+      throw new Error('OCR page image is not a PNG.');
+    }
+    return buffer;
   }
 
   private normalizeMetrics(raw: RawMetrics | null | undefined): OcrMetrics | null {
@@ -118,7 +216,7 @@ export class IaClientService {
     return null;
   }
 
-  private async readErrorDetail(res: Response): Promise<string> {
+  private async readErrorDetail(res: { text(): Promise<string> }): Promise<string> {
     const fallback = 'Error no especificado por el worker IA.';
 
     try {

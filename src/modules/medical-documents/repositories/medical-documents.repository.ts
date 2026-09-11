@@ -68,7 +68,9 @@ export type MedicalDocumentWithAssignee = Prisma.MedicalDocumentGetPayload<
 export class MedicalDocumentsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(data: Prisma.MedicalDocumentUncheckedCreateInput): Promise<MedicalDocumentWithAssignee> {
+  async create(
+    data: Prisma.MedicalDocumentUncheckedCreateInput,
+  ): Promise<MedicalDocumentWithAssignee> {
     return this.prisma.medicalDocument.create({ data, ...medicalDocumentWithAssigneeArgs });
   }
 
@@ -96,7 +98,10 @@ export class MedicalDocumentsRepository {
     return { documents, total };
   }
 
-  async findByIdAndPatient(id: string, patientId: string): Promise<MedicalDocumentWithAssignee | null> {
+  async findByIdAndPatient(
+    id: string,
+    patientId: string,
+  ): Promise<MedicalDocumentWithAssignee | null> {
     return this.prisma.medicalDocument.findFirst({
       where: { id, patientId },
       ...medicalDocumentWithAssigneeArgs,
@@ -187,6 +192,40 @@ export class MedicalDocumentsRepository {
       if (result.count !== 1) return null;
       return tx.medicalDocument.findUnique({ where: { id }, ...medicalDocumentWithAssigneeArgs });
     });
+  }
+
+  async claimProcessing(id: string, patientId: string, version: number, userId?: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const changed = await tx.medicalDocument.updateMany({
+        where: {
+          id,
+          patientId,
+          version,
+          status: { in: [DocumentStatus.PENDING, DocumentStatus.FAILED] },
+        },
+        data: {
+          status: DocumentStatus.PROCESSING,
+          version: { increment: 1 },
+          ...(userId ? { updatedBy: userId } : {}),
+        },
+      });
+      if (changed.count !== 1) return null;
+      return tx.medicalDocument.findUnique({ where: { id }, ...medicalDocumentWithAssigneeArgs });
+    });
+  }
+
+  async finishProcessing(
+    id: string,
+    patientId: string,
+    version: number,
+    status: typeof DocumentStatus.PROCESSED | typeof DocumentStatus.FAILED,
+    extra: UpdateStatusExtra,
+  ): Promise<boolean> {
+    const changed = await this.prisma.medicalDocument.updateMany({
+      where: { id, patientId, version, status: DocumentStatus.PROCESSING },
+      data: { status, ...extra, version: { increment: 1 } },
+    });
+    return changed.count === 1;
   }
 
   /**

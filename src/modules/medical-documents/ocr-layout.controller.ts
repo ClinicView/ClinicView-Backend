@@ -106,4 +106,35 @@ export class OcrLayoutController {
     });
     return new StreamableFile(bytes);
   }
+
+  @Get('reviews/:revision/evaluation-snapshot')
+  @RequirePermissions('documents.read', 'documents.validate')
+  @Audited(AUDIT_ACTIONS.DOCUMENT_OCR_EVALUATION_EXPORTED, {
+    resourceType: 'MEDICAL_DOCUMENT',
+    patientParam: 'patientId',
+    resourceParam: 'id',
+  })
+  @ApiOperation({
+    summary: 'Exportar borrador privado de evaluación de una ejecución y revisión OCR exactas',
+  })
+  async getEvaluationSnapshot(
+    @Param('patientId', ParseUUIDPipe) patientId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('revision', ParseIntPipe) revision: number,
+    @Query('runId', ParseUUIDPipe) runId: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.set({
+      'Cache-Control': 'private, no-store, max-age=0',
+      Pragma: 'no-cache',
+      Expires: '0',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    const snapshot = await this.service.getEvaluationSnapshot(patientId, id, runId, revision);
+    response.set({
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="ocr-evaluation-${runId}-r${revision}.json"`,
+    });
+    return snapshot;
+  }
 }

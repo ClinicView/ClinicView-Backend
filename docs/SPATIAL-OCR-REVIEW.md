@@ -184,6 +184,17 @@ There is no arbitrary file-path/URL input and no unauthenticated image URL.
 Returns the historical revision metadata, lines, reconstructed `correctedText` and
 `previousCorrection:{text,entities,documentVersion}`. History is read-only.
 
+### `GET /ocr-layout/reviews/:revision/evaluation-snapshot?runId=...`
+
+Requires **both** `documents.read` and `documents.validate`. Downloads a private,
+audited JSON snapshot of the exact immutable prediction and fully fragment-reviewed
+reference draft. It requires the successful job's source-file hash and each stored
+page fingerprint; no other run is substituted. This does not approve a clinical
+document, calculate CER/WER, certify complete-page coverage, or export training
+images. Historical/stale revisions remain explicitly identified.
+
+See [the evaluation contract and privacy limits](OCR-EVALUATION-SNAPSHOT.md).
+
 ## Integrity and tests
 
 Database triggers reject updates/deletes on the run and revision tables. Runs and

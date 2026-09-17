@@ -15,8 +15,10 @@ import type { SharpConstructor } from 'sharp';
 import { PrismaService } from '../../database/prisma.service';
 import { StorageService } from '../../core/storage/storage.service';
 import { IaClientService, ProcessResult } from '../../core/ia/ia-client.service';
-import { MachineOcrLayout, OCR_IDENTIFIER } from '../../core/ia/ocr-layout';
+import { MachineOcrLayout, OCR_IDENTIFIER, OcrBox } from '../../core/ia/ocr-layout';
+import { IA_JOB_UUID } from '../../core/ia/ia-job.types';
 import { SaveOcrLayoutReviewDto } from './dto/ocr-layout-review.dto';
+import { OcrEvaluationSnapshotDto } from './dto/ocr-evaluation-snapshot.dto';
 import { validateOcrReviewLines } from './ocr-layout-validation';
 import { ProcessingFence } from './processing-job';
 
@@ -316,6 +318,146 @@ export class OcrLayoutService {
       correctedText: found.correctedText,
       previousCorrection: found.previousCorrection,
     };
+  }
+
+  /** Read-only export. A reviewed fragment does not prove that an entire page was captured. */
+  async getEvaluationSnapshot(
+    patientId: string,
+    documentId: string,
+    runId: string,
+    revision: number,
+  ): Promise<OcrEvaluationSnapshotDto> {
+    if (typeof runId !== 'string' || !IA_JOB_UUID.test(runId)) {
+      throw new BadRequestException('La evaluación requiere el UUID exacto de la ejecución OCR.');
+    }
+    if (!Number.isSafeInteger(revision) || revision < 1) {
+      throw new BadRequestException('Revisión inválida.');
+    }
+    return this.prisma.$transaction(
+      async (tx) => {
+        const document = await this.findDocument(tx, patientId, documentId);
+        const run = await tx.documentOcrRun.findUnique({
+          where: { documentId_runId: { documentId, runId } },
+        });
+        if (!run) throw new NotFoundException('Ejecución OCR no encontrada.');
+        const review = await tx.documentOcrReviewRevision.findUnique({
+          where: { ocrRunId_revision: { ocrRunId: run.id, revision } },
+        });
+        if (!review) throw new NotFoundException('Revisión OCR no encontrada.');
+
+        const layout = run.machineLayout as unknown as MachineOcrLayout;
+        if (layout.runId !== runId || !layout.pages?.length) {
+          throw new ConflictException('La geometría original no corresponde a esta ejecución.');
+        }
+        const { lines, correctedText } = validateOcrReviewLines(
+          layout,
+          review.lines as unknown as SaveOcrLayoutReviewDto['lines'],
+        );
+        if (!lines.length || lines.some((line) => !line.reviewed)) {
+          throw new ConflictException(
+            'Contrasta y guarda todos los fragmentos antes de exportar el borrador de evaluación.',
+          );
+        }
+        if (correctedText !== review.correctedText) {
+          throw new ConflictException('El texto de la revisión no coincide con sus fragmentos.');
+        }
+
+        const jobs = await tx.documentProcessingJob.findMany({
+          where: { documentId, processingRunId: runId, status: 'SUCCEEDED' },
+          select: { sourceSha256: true },
+        });
+        const hashes = new Set(jobs.map((job) => job.sourceSha256));
+        const sourceSha256 = jobs[0]?.sourceSha256;
+        if (hashes.size !== 1 || !sourceSha256 || !/^[a-f0-9]{64}$/.test(sourceSha256)) {
+          throw new ConflictException(
+            'No hay una huella verificable del archivo original para esta ejecución. No se puede exportar.',
+          );
+        }
+
+        const images = run.pageImages as unknown as PageImages;
+        const predictionPages = layout.pages.map((page) => {
+          const image = images?.[String(page.page)];
+          if (
+            !image ||
+            !/^[a-f0-9]{64}$/.test(image.sha256) ||
+            image.width !== page.width ||
+            image.height !== page.height
+          ) {
+            throw new ConflictException(
+              'Falta la huella de una página preservada de esta ejecución. No se puede exportar.',
+            );
+          }
+          return {
+            page: page.page,
+            width: page.width,
+            height: page.height,
+            coordinateSpace: page.coordinateSpace,
+            imageSha256: image.sha256,
+            lines: page.lines.map((line) => ({
+              lineId: line.lineId,
+              text: line.text,
+              order: line.order,
+              bbox: [...line.bbox] as OcrBox,
+              recognitionStatus: line.recognitionStatus,
+            })),
+          };
+        });
+        const reviewPages = predictionPages.map((page) => ({
+          page: page.page,
+          width: page.width,
+          height: page.height,
+          coordinateSpace: page.coordinateSpace,
+          imageSha256: page.imageSha256,
+          lines: lines
+            .filter((line) => line.page === page.page)
+            .map((line) => ({
+              lineId: line.lineId,
+              text: line.text,
+              order: line.order,
+              bbox: [...line.bbox] as OcrBox,
+              sourceLineIds: [...line.sourceLineIds],
+              reviewed: true as const,
+            })),
+        }));
+        const currentRun = await tx.documentOcrRun.findFirst({
+          where: { documentId },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: { runId: true },
+        });
+        const latestReview = await tx.documentOcrReviewRevision.findFirst({
+          where: { ocrRunId: run.id },
+          orderBy: { revision: 'desc' },
+          select: { revision: true },
+        });
+        const isCurrentRun = currentRun?.runId === runId;
+        return {
+          schemaVersion: 1,
+          kind: 'clinicview-ocr-evaluation-snapshot',
+          exportedAt: new Date().toISOString(),
+          documentId,
+          runId,
+          revision,
+          sourceSha256,
+          provenance: {
+            referenceKind: 'ocr_postedited',
+            referenceDraft: true,
+            pageCoverage: 'unassessed',
+            clinicalValidationIsReference: false,
+            referenceDocumentVersion: review.documentVersion,
+            currentDocumentVersion: document.version,
+            currentDocumentStatus: document.status,
+            isCurrentRun,
+            isLatestReview: latestReview?.revision === revision,
+            staleAgainstCurrentCorrection:
+              !isCurrentRun || review.correctedText !== (document.correctedText ?? '').trim(),
+            reviewRecordedAt: review.createdAt.toISOString(),
+          },
+          prediction: { pages: predictionPages },
+          review: { pages: reviewPages },
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
   }
 
   async getPageImage(

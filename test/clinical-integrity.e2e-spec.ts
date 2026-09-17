@@ -2256,6 +2256,73 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     const savedDoc = await prisma.medicalDocument.findUniqueOrThrow({ where: { id: document.id } });
     expect(savedDoc.ocrText).toBe('OCR uno\nOCR dos');
     expect(savedDoc.correctedText).toBe('Revisado 1\nRevisado 2');
+    const evaluationPath = `${path}/reviews/1/evaluation-snapshot?runId=${runId}`;
+    const evaluation = (token = clinicianToken) =>
+      jsonRequest<{
+        kind: string;
+        sourceSha256: string;
+        provenance: {
+          referenceDraft: boolean;
+          pageCoverage: string;
+          staleAgainstCurrentCorrection: boolean;
+        };
+        prediction: { pages: Array<{ imageSha256: string; lines: Array<{ text: string }> }> };
+        review: {
+          pages: Array<{ lines: Array<{ text: string; bbox: number[]; sourceLineIds: string[] }> }>;
+        };
+      }>(baseUrl, evaluationPath, { headers: jsonHeaders(token) });
+    expect((await fetch(`${baseUrl}${evaluationPath}`)).status).toBe(401);
+    expect((await evaluation(readerToken)).response.status).toBe(403);
+    expect((await evaluation(limitedToken)).response.status).toBe(403);
+    expect(
+      (
+        await jsonRequest(baseUrl, evaluationPath.replace(patientId, randomUUID()), {
+          headers: jsonHeaders(clinicianToken),
+        })
+      ).response.status,
+    ).toBe(404);
+    const exported = await evaluation();
+    expect(exported.response.status).toBe(200);
+    expect(exported.response.headers.get('cache-control')).toContain('no-store');
+    expect(exported.response.headers.get('content-disposition')).toContain(
+      `ocr-evaluation-${runId}-r1.json`,
+    );
+    expect(exported.body).toMatchObject({
+      kind: 'clinicview-ocr-evaluation-snapshot',
+      sourceSha256: createHash('sha256').update(VALID_PDF).digest('hex'),
+      provenance: {
+        referenceDraft: true,
+        pageCoverage: 'unassessed',
+        clinicalValidationIsReference: false,
+      },
+    });
+    expect(exported.body.prediction.pages[0].imageSha256).toBe(
+      createHash('sha256').update(PNG_2X2).digest('hex'),
+    );
+    expect(exported.body.prediction.pages[0].lines.map((line) => line.text)).toEqual([
+      'OCR uno',
+      'OCR dos',
+    ]);
+    expect(exported.body.review.pages[0].lines[0]).toMatchObject({
+      text: 'Revisado 1',
+      bbox: [0, 0, 1, 1],
+      sourceLineIds: ['line_1'],
+    });
+    expect(JSON.stringify(exported.body)).not.toMatch(
+      /storagePath|recordedByName|previousCorrection/,
+    );
+    expect(await prisma.medicalDocument.findUniqueOrThrow({ where: { id: document.id } })).toEqual(
+      savedDoc,
+    );
+    const evaluationAudit = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        action: 'DOCUMENT_OCR_EVALUATION_EXPORTED',
+        resourceId: document.id,
+        outcome: 'SUCCESS',
+      },
+    });
+    expect(evaluationAudit.actorId).toBe(fixture.clinician.id);
+    expect(JSON.stringify(evaluationAudit)).not.toMatch(/Revisado|OCR uno/);
     const machine = await prisma.documentOcrRun.findUniqueOrThrow({
       where: { documentId_runId: { documentId: document.id, runId } },
     });
@@ -2287,6 +2354,10 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     );
     expect(flat.response.status).toBe(200);
     expect((await get()).body.review?.stale).toBe(true);
+    const historicalEvaluation = await evaluation();
+    expect(historicalEvaluation.response.status).toBe(200);
+    expect(historicalEvaluation.body.provenance.staleAgainstCurrentCorrection).toBe(true);
+    expect(historicalEvaluation.body.review.pages[0].lines[0].text).toBe('Revisado 1');
     const replacement = { ...payload, expectedVersion: flat.body.version };
     expect((await save(replacement)).response.status).toBe(409);
     expect((await save({ ...replacement, confirmTextReplacement: true })).response.status).toBe(
@@ -2320,6 +2391,12 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     };
     expect(Buffer.byteLength(JSON.stringify(largePayload))).toBeGreaterThan(100 * 1024);
     expect((await save(largePayload)).response.status).toBe(200);
+    const incompleteEvaluation = await jsonRequest(
+      baseUrl,
+      `${path}/reviews/3/evaluation-snapshot?runId=${runId}`,
+      { headers: jsonHeaders(clinicianToken) },
+    );
+    expect(incompleteEvaluation.response.status).toBe(409);
     const legacy = await uploadAndProcessDocument('ocr-legacy-sintetico.pdf');
     const legacyResponse = await jsonRequest<{ available: boolean }>(
       baseUrl,

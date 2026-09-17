@@ -18,6 +18,7 @@ import { IaClientService, ProcessResult } from '../../core/ia/ia-client.service'
 import { MachineOcrLayout, OCR_IDENTIFIER } from '../../core/ia/ocr-layout';
 import { SaveOcrLayoutReviewDto } from './dto/ocr-layout-review.dto';
 import { validateOcrReviewLines } from './ocr-layout-validation';
+import { ProcessingFence } from './processing-job';
 
 interface PageImage {
   storagePath: string;
@@ -27,6 +28,14 @@ interface PageImage {
 }
 type PageImages = Record<string, PageImage>;
 const sharp = sharpModule as unknown as SharpConstructor;
+
+/** Local publication cannot fit its preserved-page budget; repeating OCR cannot fix it. */
+export class OcrPublicationLimitError extends Error {
+  constructor() {
+    super('OCR preserved-page cache exceeds the publication limit.');
+    this.name = 'OcrPublicationLimitError';
+  }
+}
 
 function revisionMetadata(revision: DocumentOcrReviewRevision) {
   return {
@@ -59,47 +68,83 @@ export class OcrLayoutService {
     processingVersion: number,
     result: ProcessResult & { layout: MachineOcrLayout },
     userId?: string,
+    fence?: ProcessingFence,
   ): Promise<void> {
     const pageImages: PageImages = {};
     const savedPaths: string[] = [];
     // A bounded cache protects the server from pathological multi-page inputs.
     const maxTotalBytes = 256 * 1024 * 1024;
     let totalBytes = 0;
-    for (const page of result.layout.pages) {
-      if (totalBytes >= maxTotalBytes) break;
-      try {
-        const bytes = await this.ia.getPageImage(documentId, result.layout.runId, page.page);
-        if (totalBytes + bytes.length > maxTotalBytes) break;
-        const metadata = await sharp(bytes, { limitInputPixels: 100_000_000 }).metadata();
-        if (
-          metadata.format !== 'png' ||
-          metadata.width !== page.width ||
-          metadata.height !== page.height
-        ) {
-          throw new Error('Page dimensions differ from OCR coordinates.');
-        }
-        const path = await this.storage.save(
-          bytes,
-          `${page.page}-${randomUUID()}.png`,
-          `${patientId}/ocr/${documentId}/${result.layout.runId}`,
-        );
-        savedPaths.push(path);
-        pageImages[String(page.page)] = {
-          storagePath: path,
-          sha256: createHash('sha256').update(bytes).digest('hex'),
-          width: page.width,
-          height: page.height,
-        };
-        totalBytes += bytes.length;
-      } catch {
-        // Geometry remains useful, but never pretend the correct page image is available.
-        this.logger.warn(
-          `OCR page artifact unavailable for document ${documentId}, page ${page.page}.`,
-        );
-      }
-    }
+    let publicationAttempted = false;
+    let rejectedLocally = false;
     try {
+      for (const page of result.layout.pages) {
+        if (totalBytes >= maxTotalBytes) {
+          if (fence) throw new OcrPublicationLimitError();
+          break;
+        }
+        try {
+          const bytes = await this.ia.getPageImage(documentId, result.layout.runId, page.page);
+          if (totalBytes + bytes.length > maxTotalBytes) {
+            if (fence) throw new OcrPublicationLimitError();
+            break;
+          }
+          const metadata = await sharp(bytes, { limitInputPixels: 100_000_000 }).metadata();
+          if (
+            metadata.format !== 'png' ||
+            metadata.width !== page.width ||
+            metadata.height !== page.height
+          ) {
+            throw new Error('Page dimensions differ from OCR coordinates.');
+          }
+          const path = await this.storage.save(
+            bytes,
+            `${page.page}-${randomUUID()}.png`,
+            `${patientId}/ocr/${documentId}/${result.layout.runId}`,
+          );
+          savedPaths.push(path);
+          pageImages[String(page.page)] = {
+            storagePath: path,
+            sha256: createHash('sha256').update(bytes).digest('hex'),
+            width: page.width,
+            height: page.height,
+          };
+          totalBytes += bytes.length;
+        } catch (error) {
+          if (error instanceof OcrPublicationLimitError) throw error;
+          // Geometry remains useful, but never pretend the correct page image is available.
+          this.logger.warn(
+            `OCR page artifact unavailable for document ${documentId}, page ${page.page}.`,
+          );
+        }
+      }
+      if (fence && Object.keys(pageImages).length !== result.layout.pages.length) {
+        throw new Error('OCR page cache incomplete; keep the durable result for reconciliation.');
+      }
+      publicationAttempted = true;
       await this.prisma.$transaction(async (tx) => {
+        if (fence) {
+          const finished = await tx.documentProcessingJob.updateMany({
+            where: {
+              id: fence.jobId,
+              leaseToken: fence.leaseToken,
+              status: 'FINALIZING',
+              documentId,
+              documentVersion: processingVersion,
+            },
+            data: {
+              status: 'SUCCEEDED',
+              completedAt: new Date(),
+              leaseToken: null,
+              leaseUntil: null,
+              error: Prisma.DbNull,
+            },
+          });
+          if (finished.count !== 1) {
+            rejectedLocally = true;
+            throw new ConflictException('El intento perdió su reserva de procesamiento.');
+          }
+        }
         const updated = await tx.medicalDocument.updateMany({
           where: {
             id: documentId,
@@ -121,8 +166,10 @@ export class OcrLayoutService {
             version: { increment: 1 },
           },
         });
-        if (updated.count !== 1)
+        if (updated.count !== 1) {
+          rejectedLocally = true;
           throw new ConflictException('El procesamiento ya no corresponde a la versión actual.');
+        }
         await tx.documentOcrRun.create({
           data: {
             documentId,
@@ -133,13 +180,70 @@ export class OcrLayoutService {
         });
       });
     } catch (error) {
-      // Only these newly created UUID files may be removed; historical runs are untouched.
-      for (const path of savedPaths) {
-        await this.storage
-          .delete(path)
-          .catch(() => this.logger.error('Unable to clean up a new unreferenced OCR page.'));
-      }
+      await this.cleanUnpublishedPages(
+        documentId,
+        result.layout.runId,
+        savedPaths,
+        publicationAttempted,
+        rejectedLocally,
+      );
       throw error;
+    }
+  }
+
+  /** A lost commit acknowledgement is not evidence that the transaction rolled back. */
+  private async cleanUnpublishedPages(
+    documentId: string,
+    runId: string,
+    savedPaths: readonly string[],
+    publicationAttempted: boolean,
+    rejectedLocally: boolean,
+  ): Promise<void> {
+    if (!savedPaths.length) return;
+    let referenced: Set<string>;
+    try {
+      const published = await this.prisma.documentOcrRun.findUnique({
+        where: { documentId_runId: { documentId, runId } },
+        select: { pageImages: true },
+      });
+      if (!published) {
+        // Even a successful read returning no row can precede an in-flight COMMIT.
+        // Only pre-publication errors or our own callback rejection prove that
+        // this call cannot later publish these newly allocated paths.
+        if (publicationAttempted && !rejectedLocally) {
+          this.logger.warn(
+            'OCR publication could not be confirmed; new page files were preserved.',
+          );
+          return;
+        }
+        referenced = new Set();
+      } else {
+        const images = published.pageImages;
+        if (!images || typeof images !== 'object' || Array.isArray(images)) throw new Error();
+        referenced = new Set(
+          Object.values(images).map((image) => {
+            if (
+              !image ||
+              typeof image !== 'object' ||
+              Array.isArray(image) ||
+              typeof image.storagePath !== 'string' ||
+              !image.storagePath
+            )
+              throw new Error();
+            return image.storagePath;
+          }),
+        );
+      }
+    } catch {
+      // Prefer a recoverable orphan to deleting a possibly published clinical image.
+      this.logger.warn('OCR publication verification unavailable; new page files were preserved.');
+      return;
+    }
+    for (const path of savedPaths) {
+      if (referenced.has(path)) continue;
+      await this.storage
+        .delete(path)
+        .catch(() => this.logger.error('Unable to clean up a new unreferenced OCR page.'));
     }
   }
 

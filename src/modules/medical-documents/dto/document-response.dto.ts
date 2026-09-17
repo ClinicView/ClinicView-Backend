@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DocumentStatus, ReviewPriority } from '@prisma/client';
 import { ValidationChecklistSnapshotDto } from './validate-document.dto';
 import { DocumentClinicalMetadataDto } from './document-metadata.dto';
+import { processingSnapshot } from '../processing-job';
 
 export class DocumentReviewAssigneeDto {
   @ApiProperty() id: string;
@@ -11,6 +12,13 @@ export class DocumentReviewAssigneeDto {
 }
 
 export class DocumentResponseDto {
+  @ApiPropertyOptional({
+    type: Object,
+    nullable: true,
+    description:
+      'Durable OCR job, safe progress/error snapshot; progress does not change the clinical document version.',
+  })
+  processing?: ReturnType<typeof processingSnapshot>;
   @ApiPropertyOptional({ type: DocumentClinicalMetadataDto })
   clinicalMetadata?: DocumentClinicalMetadataDto;
   @ApiProperty() id: string;

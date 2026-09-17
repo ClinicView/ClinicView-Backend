@@ -1,5 +1,5 @@
 import type { AddressInfo } from 'node:net';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
@@ -17,6 +17,14 @@ import { AppModule } from '../src/app.module';
 import { setupApp } from '../src/app.setup';
 import { IaClientService, ProcessResult } from '../src/core/ia/ia-client.service';
 import { normalizeOcrLayout } from '../src/core/ia/ocr-layout';
+import { IaJobHttpError, IaJobResult, IaJobStatus } from '../src/core/ia/ia-job.types';
+import { ProcessingJobsService } from '../src/modules/medical-documents/processing-jobs.service';
+import { initialProgress } from '../src/modules/medical-documents/processing-job';
+import { PrismaService } from '../src/database/prisma.service';
+import { StorageService } from '../src/core/storage/storage.service';
+import { MedicalDocumentsRepository } from '../src/modules/medical-documents/repositories/medical-documents.repository';
+import { OcrLayoutService } from '../src/modules/medical-documents/ocr-layout.service';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
 import {
   CLINICAL_E2E_PHI,
   ClinicalE2eIdentity,
@@ -108,6 +116,13 @@ interface DocumentResponse {
   assignedReviewerId: string | null;
   version: number;
   storagePath?: string;
+  processing?: {
+    jobId: string;
+    attempt: number;
+    status: string;
+    canRetry: boolean;
+    error: { code: string } | null;
+  } | null;
 }
 
 interface AssignmentResponse {
@@ -158,6 +173,7 @@ describe('Integridad clínica real y aislada (e2e)', () => {
   let patientId: string;
   let attachedAsset: MediaAssetResponse;
   let consultation: RecordResponse;
+  let jobs: ProcessingJobsService;
   const createdRecords = new Map<RecordType, RecordResponse>();
 
   const iaProcess = jest.fn<Promise<ProcessResult>, Parameters<IaClientService['process']>>(
@@ -184,6 +200,57 @@ describe('Integridad clínica real y aislada (e2e)', () => {
       confidenceLevel: 'HIGH' as const,
     }),
   );
+
+  // Durable IA boundary simulated in memory; backend HTTP, leases, transactions
+  // and immutable run storage still use the real isolated PostgreSQL schema.
+  const remoteJobs = new Map<string, { status: IaJobStatus; result: IaJobResult }>();
+  function completedRemote(
+    jobId: string,
+    documentId: string,
+    sourceSha256: string,
+    result: ProcessResult,
+  ) {
+    const now = new Date().toISOString();
+    const record: { status: IaJobStatus; result: IaJobResult } = {
+      status: {
+        jobId,
+        documentId,
+        sourceSha256,
+        status: 'SUCCEEDED' as const,
+        attempt: 1 as const,
+        processingRunId: result.layout?.runId ?? null,
+        createdAt: now,
+        updatedAt: now,
+        startedAt: now,
+        completedAt: now,
+        heartbeatAt: now,
+        progress: { ...initialProgress(), phase: 'COMPLETE' as const },
+        error: null,
+      },
+      result: { ...result, documentId, processingRunId: result.layout?.runId ?? null },
+    };
+    remoteJobs.set(jobId, record);
+    return record;
+  }
+  const iaGetJob = jest.fn<Promise<IaJobStatus>, [string]>(async (jobId) => {
+    const remote = remoteJobs.get(jobId);
+    if (!remote) throw new IaJobHttpError(404);
+    return remote.status;
+  });
+  const iaSubmitJob = jest.fn<Promise<IaJobStatus>, Parameters<IaClientService['submitJob']>>(
+    async (jobId, documentId, hash, bytes, mime) => {
+      const existing = remoteJobs.get(jobId);
+      if (existing) return existing.status;
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(hash);
+      return completedRemote(jobId, documentId, hash, await iaProcess(documentId, bytes, mime))
+        .status;
+    },
+  );
+  const iaGetJobResult = jest.fn<Promise<IaJobResult>, [string]>(async (jobId) => {
+    const remote = remoteJobs.get(jobId);
+    if (!remote) throw new IaJobHttpError(404);
+    return remote.result;
+  });
 
   async function login(identity: ClinicalE2eIdentity): Promise<string> {
     const { response, body } = await jsonRequest<TokenResponse>(baseUrl, '/api/auth/login', {
@@ -225,6 +292,7 @@ describe('Integridad clínica real y aislada (e2e)', () => {
     expectedStatus: DocumentStatus,
   ): Promise<DocumentResponse> {
     for (let attempt = 0; attempt < 80; attempt += 1) {
+      await jobs.tick();
       const current = await jsonRequest<DocumentResponse>(
         baseUrl,
         `/api/patients/${patientId}/documents/${documentId}`,
@@ -286,13 +354,20 @@ describe('Integridad clínica real y aislada (e2e)', () => {
 
     moduleFixture = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(IaClientService)
-      .useValue({ process: iaProcess, getPageImage: jest.fn(async () => PNG_2X2) })
+      .useValue({
+        process: iaProcess,
+        getPageImage: jest.fn(async () => PNG_2X2),
+        getJob: iaGetJob,
+        submitJob: iaSubmitJob,
+        getJobResult: iaGetJobResult,
+      })
       .compile();
     app = moduleFixture.createNestApplication({ logger: false });
     setupApp(app, { enableSwagger: false });
     await app.listen(0, '127.0.0.1');
     const address = app.getHttpServer().address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${address.port}`;
+    jobs = moduleFixture.get(ProcessingJobsService);
 
     clinicianToken = await login(fixture.clinician);
     peerToken = await login(fixture.peerClinician);
@@ -2048,7 +2123,7 @@ describe('Integridad clínica real y aislada (e2e)', () => {
   });
 
   it('preserva OCR espacial privado y revisiones atómicas con procedencia y conflictos reales', async () => {
-    const runId = `e2e_${randomUUID()}`;
+    const runId = randomUUID();
     const layout = normalizeOcrLayout(runId, [
       {
         page: 1,
@@ -2252,6 +2327,174 @@ describe('Integridad clínica real y aislada (e2e)', () => {
       { headers: jsonHeaders(readerToken) },
     );
     expect(legacyResponse.body.available).toBe(false);
+  });
+
+  it('persiste un único trabajo OCR, conserva la versión ante fallos de red y recupera el resultado tras reinicio', async () => {
+    const historical = await prisma.documentOcrRun.findMany({ orderBy: { id: 'asc' } });
+    const uploaded = await uploadMultipart<DocumentResponse>(
+      `/api/patients/${patientId}/documents`,
+      clinicianToken,
+      VALID_PDF,
+      'cola-recuperable-sintetica.pdf',
+      'application/pdf',
+    );
+    expect(uploaded.response.status).toBe(201);
+    const path = `/api/patients/${patientId}/documents/${uploaded.body.id}`;
+    const request = {
+      method: 'POST',
+      headers: jsonHeaders(clinicianToken),
+      body: JSON.stringify({ expectedVersion: uploaded.body.version }),
+    };
+    const submissions = await Promise.all([
+      jsonRequest<DocumentResponse>(baseUrl, `${path}/process`, request),
+      jsonRequest<DocumentResponse>(baseUrl, `${path}/process`, request),
+    ]);
+    expect(submissions.map((item) => item.response.status)).toEqual([200, 200]);
+    expect(submissions[0].body.processing?.jobId).toBe(submissions[1].body.processing?.jobId);
+    expect(
+      await prisma.documentProcessingJob.count({ where: { documentId: uploaded.body.id } }),
+    ).toBe(1);
+    const queued = await prisma.documentProcessingJob.findFirstOrThrow({
+      where: { documentId: uploaded.body.id },
+    });
+    expect(queued.sourceSha256).toBe(createHash('sha256').update(VALID_PDF).digest('hex'));
+    const version = submissions[0].body.version;
+    const postsBefore = iaSubmitJob.mock.calls.length;
+    iaGetJob.mockRejectedValueOnce(new Error('PRIVATE NETWORK SENTINEL'));
+    await jobs.tick();
+    const waiting = await jsonRequest<DocumentResponse>(baseUrl, path, {
+      headers: jsonHeaders(clinicianToken),
+    });
+    expect(waiting.body.status).toBe(DocumentStatus.PROCESSING);
+    expect(waiting.body.version).toBe(version);
+    expect(waiting.body.processing).toMatchObject({
+      jobId: queued.id,
+      status: 'WAITING_FOR_WORKER',
+      canRetry: false,
+    });
+    expect(JSON.stringify(waiting.body.processing)).not.toContain('PRIVATE NETWORK SENTINEL');
+    expect(iaSubmitJob.mock.calls.length).toBe(postsBefore);
+    // Simulate an IA result completed while the backend was offline. This identity
+    // is recovered from the persistent backend row, never a document "latest" pointer.
+    completedRemote(queued.id, uploaded.body.id, queued.sourceSha256, {
+      ocrText: 'Resultado sintético recuperado',
+      entities: [],
+      metrics: null,
+      ocrConfidence: 0.5,
+      confidenceLevel: 'MEDIUM',
+    });
+    await prisma.documentProcessingJob.update({
+      where: { id: queued.id },
+      data: { nextPollAt: new Date(0) },
+    });
+    const restarted = new ProcessingJobsService(
+      moduleFixture.get(PrismaService),
+      moduleFixture.get(MedicalDocumentsRepository),
+      moduleFixture.get(StorageService),
+      moduleFixture.get(IaClientService),
+      moduleFixture.get(OcrLayoutService),
+      moduleFixture.get(NotificationsService),
+    );
+    await restarted.onModuleInit();
+    const resultCallsBefore = iaGetJobResult.mock.calls.length;
+    await Promise.all([jobs.tick(), restarted.tick()]);
+    restarted.onModuleDestroy();
+    const completed = await jsonRequest<DocumentResponse>(baseUrl, path, {
+      headers: jsonHeaders(clinicianToken),
+    });
+    expect(completed.body).toMatchObject({
+      status: DocumentStatus.PROCESSED,
+      version: version + 1,
+      ocrText: 'Resultado sintético recuperado',
+      processing: { jobId: queued.id, status: 'SUCCEEDED', attempt: 1 },
+    });
+    expect(iaGetJobResult.mock.calls.length).toBe(resultCallsBefore + 1);
+    expect(iaSubmitJob.mock.calls.length).toBe(postsBefore);
+    expect(
+      await prisma.documentProcessingJob.count({ where: { documentId: uploaded.body.id } }),
+    ).toBe(1);
+    expect(await prisma.documentOcrRun.findMany({ orderBy: { id: 'asc' } })).toEqual(historical);
+    await jobs.tick();
+    expect(
+      (await prisma.medicalDocument.findUniqueOrThrow({ where: { id: uploaded.body.id } })).version,
+    ).toBe(version + 1);
+  });
+
+  it('permite reintentar solo un fallo confirmado con otra identidad y conserva el intento anterior', async () => {
+    const uploaded = await uploadMultipart<DocumentResponse>(
+      `/api/patients/${patientId}/documents`,
+      clinicianToken,
+      VALID_PDF,
+      'reintento-confirmado-sintetico.pdf',
+      'application/pdf',
+    );
+    expect(uploaded.response.status).toBe(201);
+    const path = `/api/patients/${patientId}/documents/${uploaded.body.id}`;
+    const first = await jsonRequest<DocumentResponse>(baseUrl, `${path}/process`, {
+      method: 'POST',
+      headers: jsonHeaders(clinicianToken),
+      body: JSON.stringify({ expectedVersion: uploaded.body.version }),
+    });
+    expect(first.response.status).toBe(200);
+    const prior = await prisma.documentProcessingJob.findFirstOrThrow({
+      where: { documentId: uploaded.body.id },
+    });
+    const remote = completedRemote(prior.id, uploaded.body.id, prior.sourceSha256, {
+      ocrText: '',
+      entities: [],
+      metrics: null,
+      ocrConfidence: null,
+      confidenceLevel: null,
+    });
+    remote.status = {
+      ...remote.status,
+      status: 'FAILED',
+      progress: { ...initialProgress(), phase: 'RECOGNIZING' },
+      error: { code: 'OCR_FAILED', message: 'Fallo sintético confirmado', retryable: true },
+    };
+    await jobs.tick();
+    const failed = await jsonRequest<DocumentResponse>(baseUrl, path, {
+      headers: jsonHeaders(clinicianToken),
+    });
+    expect(failed.body.status).toBe(DocumentStatus.FAILED);
+    expect(failed.body.processing).toMatchObject({ status: 'FAILED', canRetry: true, attempt: 1 });
+    const failedRow = await prisma.documentProcessingJob.findUniqueOrThrow({
+      where: { id: prior.id },
+    });
+    const retry = {
+      method: 'POST',
+      headers: jsonHeaders(clinicianToken),
+      body: JSON.stringify({ expectedVersion: failed.body.version }),
+    };
+    const responses = await Promise.all([
+      jsonRequest<DocumentResponse>(baseUrl, `${path}/process`, retry),
+      jsonRequest<DocumentResponse>(baseUrl, `${path}/process`, retry),
+    ]);
+    expect(responses.map((item) => item.response.status)).toEqual([200, 200]);
+    expect(responses[0].body.processing?.jobId).not.toBe(prior.id);
+    expect(responses[0].body.processing?.jobId).toBe(responses[1].body.processing?.jobId);
+    expect(responses[0].body.processing?.attempt).toBe(2);
+    await waitForDocumentStatus(uploaded.body.id, DocumentStatus.PROCESSED);
+    const attempts = await prisma.documentProcessingJob.findMany({
+      where: { documentId: uploaded.body.id },
+      orderBy: { attempt: 'asc' },
+    });
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toEqual(failedRow);
+    expect(attempts[1]).toMatchObject({
+      status: 'SUCCEEDED',
+      attempt: 2,
+      sourceSha256: prior.sourceSha256,
+    });
+    const staleRetry = await jsonRequest(baseUrl, `${path}/process`, {
+      method: 'POST',
+      headers: jsonHeaders(clinicianToken),
+      body: JSON.stringify({ expectedVersion: uploaded.body.version }),
+    });
+    expect(staleRetry.response.status).toBe(409);
+    expect(iaSubmitJob.mock.calls.filter(([, docId]) => docId === uploaded.body.id)).toHaveLength(
+      1,
+    );
   });
 
   it('no persiste PHI de payloads clínicos en la bitácora', async () => {

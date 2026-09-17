@@ -35,6 +35,7 @@ export default () => ({
   ia: {
     internalUrl: process.env.IA_INTERNAL_URL ?? 'http://ia:8000',
     internalApiKey: process.env.IA_INTERNAL_API_KEY,
+    jobTimeoutMs: boundedInteger(process.env.IA_JOB_TIMEOUT_MS, 15000, 1000, 60000),
     processTimeoutMs: boundedInteger(process.env.IA_PROCESS_TIMEOUT_MS, 1800000, 10000, 7200000),
     imageTimeoutMs: boundedInteger(process.env.IA_IMAGE_TIMEOUT_MS, 30000, 1000, 120000),
     maxPageImageBytes: boundedInteger(

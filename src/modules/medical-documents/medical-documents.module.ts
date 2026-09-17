@@ -7,6 +7,7 @@ import { DocumentMetadataController } from './document-metadata.controller';
 import { DocumentMetadataService } from './document-metadata.service';
 import { OcrLayoutService } from './ocr-layout.service';
 import { OcrLayoutController } from './ocr-layout.controller';
+import { ProcessingJobsService } from './processing-jobs.service';
 
 @Module({
   imports: [NotificationsModule],
@@ -16,6 +17,7 @@ import { OcrLayoutController } from './ocr-layout.controller';
     MedicalDocumentsRepository,
     DocumentMetadataService,
     OcrLayoutService,
+    ProcessingJobsService,
   ],
 })
 export class MedicalDocumentsModule {}

@@ -15,9 +15,10 @@ PENDING ──process──▶ PROCESSING ──OCR ok──▶ PROCESSED ──
 
 - `PROCESSED` = "en corrección": tiene `ocrText` + `nerEntities` + `metrics`,
   espera corrección/validación humana.
-- Si el servidor se reinicia con documentos en `PROCESSING`, al arrancar se
-  marcan `FAILED` automáticamente (`MedicalDocumentsService.onModuleInit`) —
-  el OCR en segundo plano murió con el proceso y puede reintentarse.
+- Un reinicio del backend conserva los trabajos persistentes en `PROCESSING`
+  y vuelve a consultar el mismo UUID en IA. La pérdida de conexión no es un
+  fallo terminal. Solo los documentos legacy sin identidad de trabajo pasan a
+  `FAILED` al arrancar. Véase [trabajos OCR persistentes](OCR-PROCESSING.md).
 
 ## Paso a paso
 
@@ -27,17 +28,23 @@ PENDING ──process──▶ PROCESSING ──OCR ok──▶ PROCESSED ──
    (`StorageService`; configurable con `storage.uploadDir`). El paciente debe
    estar activo.
 
-2. **Procesamiento** — `POST /patients/:patientId/documents/:id/process`.
-   Responde **de inmediato** con estado `PROCESSING`; el OCR corre en segundo
-   plano (`runProcessing`):
-   - Lee el binario y lo envía al worker IA (`IaClientService`) como
-     `data:` URI base64 al endpoint `POST {IA_INTERNAL_URL}/v1/process`.
+2. **Procesamiento** — `POST /patients/:patientId/documents/:id/process`, con
+   `{ "expectedVersion": versionActual }`.
+   Persiste de forma atómica documento e intento y responde con `PROCESSING`;
+   el coordinador `ProcessingJobsService` consulta la cola sin mantener abierta
+   la conexión del navegador durante el OCR:
+   - Envía el binario al worker como `data:` URI a `POST /v1/jobs/{jobId}`,
+     autenticado mediante clave interna, con hash SHA-256 y UUID idempotente.
+   - Consulta estado/progreso y recoge el resultado durable; guarda las páginas
+     preservadas antes de publicar el resultado y su ejecución espacial.
    - Con la respuesta guarda: `ocrText`, `nerEntities`, `metrics`
-     (CER/WER/charAccuracy/NER, normalizadas a camelCase), `ocrConfidence`
+     (si están disponibles, normalizadas a camelCase), `ocrConfidence`
      y `confidenceLevel` (HIGH/MEDIUM/LOW).
    - Crea una **notificación** para el usuario que inició el proceso
      (`DOCUMENT_PROCESSED` o `DOCUMENT_FAILED`); la campana del frontend la
      recoge por polling y navega al documento.
+   - La confianza no equivale a precisión medida. CER/WER requieren una
+     transcripción de referencia; validar en la web no los recalcula todavía.
 
 3. **Corrección** — `PATCH .../:id/correction` con `correctedText` y/o
    `correctedEntities`. El OCR original nunca se sobrescribe (trazabilidad).

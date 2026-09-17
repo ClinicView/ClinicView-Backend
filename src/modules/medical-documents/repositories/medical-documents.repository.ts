@@ -54,6 +54,7 @@ export interface RejectDocumentData {
 
 const medicalDocumentWithAssigneeArgs = {
   include: {
+    processingJobs: { orderBy: { attempt: 'desc' }, take: 1 },
     assignedReviewer: {
       select: { id: true, username: true, fullName: true, profession: true },
     },
@@ -109,13 +110,13 @@ export class MedicalDocumentsRepository {
   }
 
   /**
-   * Marca como FAILED los documentos que quedaron en PROCESSING tras un
-   * reinicio del servidor (el OCR en segundo plano murió con el proceso).
+   * Recover only legacy pre-job documents. A durable job can still be running
+   * on IA after this Nest process restarts; never mark those documents failed.
    */
   async failStaleProcessing(): Promise<number> {
     const result = await this.prisma.medicalDocument.updateMany({
-      where: { status: DocumentStatus.PROCESSING },
-      data: { status: DocumentStatus.FAILED },
+      where: { status: DocumentStatus.PROCESSING, processingJobs: { none: {} } },
+      data: { status: DocumentStatus.FAILED, version: { increment: 1 } },
     });
     return result.count;
   }

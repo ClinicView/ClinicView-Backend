@@ -1,7 +1,18 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Agent } from 'undici';
+import { createHash } from 'node:crypto';
 import { MachineOcrLayout, normalizeOcrLayout, OCR_IDENTIFIER } from './ocr-layout';
+import {
+  assertIaJobIdentity,
+  IA_JOB_UUID,
+  IA_SOURCE_SHA256,
+  IaJobHttpError,
+  IaJobProtocolError,
+  IaJobResult,
+  IaJobStatus,
+  parseIaJobStatus,
+} from './ia-job.types';
 
 export interface ExtractedEntity {
   type: 'DIAGNOSIS' | 'SYMPTOM' | 'MEDICATION' | 'PROCEDURE' | 'CLINICAL_DATE' | 'OBSERVATION';
@@ -51,6 +62,7 @@ interface RawMetrics {
 }
 
 interface RawProcessResponse {
+  documentId?: string;
   ocr: { text: string; pages?: unknown };
   processingRunId?: string | null;
   entities: ExtractedEntity[];
@@ -64,6 +76,8 @@ export class IaClientService implements OnModuleDestroy {
   private readonly baseUrl: string;
   private readonly processAgent: Agent;
   private readonly processTimeoutMs: number;
+  private readonly jobAgent: Agent;
+  private readonly jobTimeoutMs: number;
 
   constructor(private readonly configService: ConfigService) {
     this.baseUrl = this.configService.get<string>('ia.internalUrl', 'http://ia:8000');
@@ -75,6 +89,24 @@ export class IaClientService implements OnModuleDestroy {
     ) {
       throw new Error('IA process timeout must be a positive, bounded duration.');
     }
+    this.jobTimeoutMs = this.configService.get<number>('ia.jobTimeoutMs', 15000);
+    if (
+      !Number.isSafeInteger(this.jobTimeoutMs) ||
+      this.jobTimeoutMs <= 0 ||
+      this.jobTimeoutMs > 60000
+    ) {
+      throw new Error('IA job timeout must be a positive, bounded duration.');
+    }
+    // Independent short requests must not queue behind a legacy long OCR POST.
+    this.jobAgent = new Agent({
+      headersTimeout: this.jobTimeoutMs,
+      bodyTimeout: this.jobTimeoutMs,
+      connect: { timeout: Math.min(10000, this.jobTimeoutMs) },
+      connections: 4,
+      pipelining: 1,
+      maxOrigins: 1,
+      allowH2: false,
+    });
     // A total AbortSignal does not replace Undici's independent 300 s defaults.
     // Keep a private dispatcher: other HTTP clients retain their own policies.
     this.processAgent = new Agent({
@@ -91,7 +123,7 @@ export class IaClientService implements OnModuleDestroy {
   async onModuleDestroy(): Promise<void> {
     // An application shutdown must release sockets, not wait up to 30 minutes.
     // Deliberately abort pending requests; never automatically retry an OCR POST.
-    await this.processAgent.destroy();
+    await Promise.all([this.processAgent.destroy(), this.jobAgent.destroy()]);
   }
 
   async process(
@@ -131,6 +163,199 @@ export class IaClientService implements OnModuleDestroy {
 
     const data = (await res.body.json()) as RawProcessResponse;
 
+    return this.normalizeProcessResult(data);
+  }
+
+  /** Same UUID + immutable source identity is the only safe submission replay. */
+  async submitJob(
+    jobId: string,
+    documentId: string,
+    sourceSha256: string,
+    fileBytes: Buffer,
+    mimeType: 'image/jpeg' | 'image/png' | 'application/pdf',
+  ): Promise<IaJobStatus> {
+    if (
+      !/^[A-Za-z0-9_-]{1,200}$/.test(documentId) ||
+      !IA_SOURCE_SHA256.test(sourceSha256) ||
+      !['image/jpeg', 'image/png', 'application/pdf'].includes(mimeType) ||
+      fileBytes.length === 0 ||
+      fileBytes.length > 20 * 1024 * 1024 ||
+      createHash('sha256').update(fileBytes).digest('hex') !== sourceSha256
+    ) {
+      throw new IaJobProtocolError();
+    }
+    const raw = await this.requestJob(jobId, 'POST', false, {
+      documentId,
+      sourceSha256,
+      mimeType,
+      fileRef: `data:${mimeType};base64,${fileBytes.toString('base64')}`,
+      options: { language: 'es', withEntities: true },
+    });
+    const status = parseIaJobStatus(raw, jobId);
+    assertIaJobIdentity(status, documentId, sourceSha256);
+    return status;
+  }
+
+  async getJob(jobId: string): Promise<IaJobStatus> {
+    return parseIaJobStatus(await this.requestJob(jobId, 'GET', false), jobId);
+  }
+
+  async getJobResult(jobId: string): Promise<IaJobResult> {
+    const raw = await this.requestJob(jobId, 'GET', true);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new IaJobProtocolError();
+    const data = raw as RawProcessResponse;
+    if (
+      typeof data.documentId !== 'string' ||
+      !/^[A-Za-z0-9_-]{1,200}$/.test(data.documentId) ||
+      (data.processingRunId !== null &&
+        (typeof data.processingRunId !== 'string' || !IA_JOB_UUID.test(data.processingRunId))) ||
+      !data.ocr ||
+      typeof data.ocr.text !== 'string' ||
+      data.ocr.text.length > 2000000 ||
+      !Array.isArray(data.ocr.pages) ||
+      data.ocr.pages.length > 1000 ||
+      !Array.isArray(data.entities) ||
+      data.entities.length > 20000
+    )
+      throw new IaJobProtocolError();
+    const entityTypes = [
+      'DIAGNOSIS',
+      'SYMPTOM',
+      'MEDICATION',
+      'PROCEDURE',
+      'CLINICAL_DATE',
+      'OBSERVATION',
+    ];
+    for (const entity of data.entities) {
+      if (
+        !entity ||
+        !entityTypes.includes(entity.type) ||
+        typeof entity.value !== 'string' ||
+        entity.value.length > 50000 ||
+        !Number.isFinite(entity.confidence) ||
+        entity.confidence < 0 ||
+        entity.confidence > 1 ||
+        (entity.normalizedValue != null && typeof entity.normalizedValue !== 'string')
+      ) {
+        throw new IaJobProtocolError();
+      }
+      const span = entity.sourceSpan;
+      if (
+        span != null &&
+        (!Number.isSafeInteger(span.page) ||
+          span.page < 1 ||
+          !Number.isSafeInteger(span.start) ||
+          span.start < 0 ||
+          !Number.isSafeInteger(span.end) ||
+          span.end < span.start)
+      )
+        throw new IaJobProtocolError();
+    }
+    if (
+      !data.confidence ||
+      !Number.isFinite(data.confidence.overall) ||
+      data.confidence.overall! < 0 ||
+      data.confidence.overall! > 1 ||
+      !this.normalizeLevel(data.confidence.level)
+    )
+      throw new IaJobProtocolError();
+    if (data.metrics != null) {
+      if (
+        typeof data.metrics !== 'object' ||
+        Array.isArray(data.metrics) ||
+        typeof data.metrics.estimated !== 'boolean'
+      )
+        throw new IaJobProtocolError();
+      for (const key of [
+        'cer',
+        'wer',
+        'char_accuracy',
+        'ner_precision',
+        'ner_recall',
+        'ner_f1',
+      ] as const) {
+        if (data.metrics[key] != null && !Number.isFinite(data.metrics[key]))
+          throw new IaJobProtocolError();
+      }
+    }
+    const normalized = this.normalizeProcessResult(data);
+    // A job declaring a spatial run must not silently downgrade malformed geometry
+    // into the legacy flat-text path, which would lose its review provenance.
+    if (data.processingRunId !== null && !normalized.layout) throw new IaJobProtocolError();
+    return {
+      ...normalized,
+      documentId: data.documentId,
+      processingRunId: data.processingRunId ?? null,
+    };
+  }
+
+  private async requestJob(
+    jobId: string,
+    method: 'GET' | 'POST',
+    result: boolean,
+    payload?: object,
+  ): Promise<unknown> {
+    if (!IA_JOB_UUID.test(jobId) || (result && method !== 'GET')) throw new IaJobProtocolError();
+    const key = this.configService.get<string>('ia.internalApiKey');
+    if (typeof key !== 'string' || key.length < 32)
+      throw new Error('IA internal job access is not configured.');
+    const endpoint = new URL(
+      `${this.baseUrl.replace(/\/$/, '')}/v1/jobs/${jobId}${result ? '/result' : ''}`,
+    );
+    const response = await this.jobAgent.request({
+      origin: endpoint.origin,
+      path: `${endpoint.pathname}${endpoint.search}`,
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-IA-Internal-Key': key,
+      },
+      ...(payload ? { body: JSON.stringify(payload) } : {}),
+      headersTimeout: this.jobTimeoutMs,
+      bodyTimeout: this.jobTimeoutMs,
+      signal: AbortSignal.timeout(this.jobTimeoutMs),
+      idempotent: false,
+    });
+    // Destroying an unread Undici body emits AbortError. Register a listener
+    // before rejecting headers/status; the async iterator still rejects reads.
+    response.body.on('error', () => undefined);
+    // No redirects, retries, or worker error-body logging (even for 404/409/429).
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      response.body.destroy();
+      throw new IaJobHttpError(response.statusCode);
+    }
+    const contentType = response.headers['content-type'];
+    const limit = result ? 16 * 1024 * 1024 : 64 * 1024;
+    if (
+      typeof contentType !== 'string' ||
+      contentType.split(';')[0].trim() !== 'application/json' ||
+      Number(response.headers['content-length']) > limit
+    ) {
+      response.body.destroy();
+      throw new IaJobProtocolError();
+    }
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    try {
+      for await (const chunk of response.body) {
+        const buffer = Buffer.from(chunk);
+        bytes += buffer.length;
+        if (bytes > limit) throw new IaJobProtocolError();
+        chunks.push(buffer);
+      }
+    } catch (error) {
+      response.body.destroy();
+      throw error;
+    }
+    try {
+      return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+    } catch {
+      throw new IaJobProtocolError();
+    }
+  }
+
+  private normalizeProcessResult(data: RawProcessResponse): ProcessResult {
     return {
       ocrText: data.ocr.text,
       entities: data.entities,

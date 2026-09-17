@@ -13,7 +13,7 @@ API REST de la plataforma clínica hospitalaria **ClinicView**, construida con N
 
 ## Requisitos
 
-- Node.js 18+
+- Node.js 20.18.1 o superior (según `engines` de `package.json`)
 - npm
 - PostgreSQL
 
@@ -38,6 +38,8 @@ cp .env.example .env
 | `JWT_SECRET` | Clave secreta para tokens JWT (mín. 32 chars) |
 | `JWT_REFRESH_SECRET` | Clave secreta para refresh tokens |
 | `IA_INTERNAL_URL` | URL del servicio de IA |
+| `IA_INTERNAL_API_KEY` | Clave privada compartida con IA, mínimo 32 caracteres; nunca exponer al frontend |
+| `IA_JOB_TIMEOUT_MS` | Límite de cada petición a la cola IA, por defecto 15000 ms; no limita la inferencia |
 | `FRONTEND_URL` | URL del frontend (para CORS) |
 | `UPLOAD_DIR` | Directorio de archivos subidos |
 | `ADMIN_EMAIL` | Email del administrador inicial |
@@ -93,6 +95,11 @@ src/
 - **Audit** — Registro de auditoría
 
 ## API Docs
+
+El [procesamiento OCR persistente](docs/OCR-PROCESSING.md) documenta la migración,
+los estados y contadores reales, recuperación de trabajos, reintentos seguros,
+límites de almacenamiento y verificación del flujo. Debe desplegarse con las
+versiones compatibles del frontend y del servicio IA.
 
 Con el servidor corriendo, la documentación Swagger está disponible en:
 ```

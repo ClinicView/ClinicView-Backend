@@ -4,7 +4,7 @@ import { PrismaService } from '../../database/prisma.service';
 import { StorageService } from '../../core/storage/storage.service';
 import { IaClientService } from '../../core/ia/ia-client.service';
 import { normalizeOcrLayout } from '../../core/ia/ocr-layout';
-import { OcrLayoutService } from './ocr-layout.service';
+import { OcrLayoutService, OcrPublicationLimitError } from './ocr-layout.service';
 
 const layout = normalizeOcrLayout('run_1', [
   {
@@ -217,5 +217,201 @@ describe('OcrLayoutService', () => {
     await expect(service.getPageImage('patient', 'doc', 'run_1', 1)).rejects.toThrow(
       NotFoundException,
     );
+  });
+});
+
+describe('OcrLayoutService publication acknowledgement and page cleanup', () => {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEElEQVQImWNgOP7/PxjDGABdXAsVTWN7aAAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const onePage = normalizeOcrLayout('run_new', [
+    {
+      page: 1,
+      width: 2,
+      height: 2,
+      coordinateSpace: 'preprocessed_page',
+      lines: [{ lineId: 'line_1', text: 'Synthetic', bbox: [0, 0, 2, 1] }],
+    },
+  ])!;
+  const result = () => ({
+    ocrText: 'Synthetic',
+    entities: [],
+    metrics: null,
+    ocrConfidence: 0.5,
+    confidenceLevel: 'MEDIUM' as const,
+    layout: onePage,
+  });
+  const fence = { jobId: 'job-new', leaseToken: 'lease-new' };
+  let service: OcrLayoutService;
+  let database: {
+    medicalDocument: { updateMany: jest.Mock };
+    documentProcessingJob: { updateMany: jest.Mock };
+    documentOcrRun: { create: jest.Mock; findUnique: jest.Mock };
+    $transaction: jest.Mock;
+  };
+  let storage: { save: jest.Mock; delete: jest.Mock };
+  let ia: { getPageImage: jest.Mock };
+  beforeEach(() => {
+    database = {
+      medicalDocument: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      documentProcessingJob: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      documentOcrRun: { create: jest.fn(), findUnique: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn(),
+    };
+    database.$transaction.mockImplementation((callback: (tx: typeof database) => unknown) =>
+      callback(database),
+    );
+    storage = {
+      save: jest.fn().mockResolvedValue('patient/ocr/doc/run_new/new-page.png'),
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    ia = { getPageImage: jest.fn().mockResolvedValue(png) };
+    service = new OcrLayoutService(
+      database as unknown as PrismaService,
+      storage as unknown as StorageService,
+      ia as unknown as IaClientService,
+    );
+  });
+
+  it('preserves a page referenced by a committed run when the transaction acknowledgement is lost', async () => {
+    let published: { pageImages: unknown } | null = null;
+    database.documentOcrRun.create.mockImplementation(
+      async ({ data }: { data: { pageImages: unknown } }) => {
+        published = { pageImages: data.pageImages };
+      },
+    );
+    database.documentOcrRun.findUnique.mockImplementation(async () => published);
+    const lost = new Error('Commit acknowledgement lost');
+    database.$transaction.mockImplementation(async (callback: (tx: typeof database) => unknown) => {
+      await callback(database);
+      throw lost;
+    });
+    await expect(
+      service.completeProcessing('doc', 'patient', 4, result(), 'actor', fence),
+    ).rejects.toBe(lost);
+    expect(database.documentOcrRun.create).toHaveBeenCalledTimes(1);
+    expect(database.documentOcrRun.findUnique).toHaveBeenCalledWith({
+      where: { documentId_runId: { documentId: 'doc', runId: 'run_new' } },
+      select: { pageImages: true },
+    });
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
+  it('preserves pages if the database cannot verify whether publication committed', async () => {
+    const original = new Error('Uncertain transaction result');
+    database.$transaction.mockRejectedValue(original);
+    database.documentOcrRun.findUnique.mockRejectedValue(new Error('Database unavailable'));
+    await expect(
+      service.completeProcessing('doc', 'patient', 4, result(), 'actor', fence),
+    ).rejects.toBe(original);
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a missing row as proof that an uncertain in-flight commit cannot finish', async () => {
+    database.$transaction.mockRejectedValue(new Error('Uncertain commit'));
+    database.documentOcrRun.findUnique.mockResolvedValue(null);
+    await expect(
+      service.completeProcessing('doc', 'patient', 4, result(), 'actor', fence),
+    ).rejects.toThrow('Uncertain commit');
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletes only its new copy when another immutable run copy won publication', async () => {
+    database.$transaction.mockRejectedValue(new Error('Concurrent publication conflict'));
+    database.documentOcrRun.findUnique.mockResolvedValue({
+      pageImages: {
+        '1': { storagePath: 'patient/ocr/doc/run_new/historical-page.png' },
+      },
+    });
+    await expect(
+      service.completeProcessing('doc', 'patient', 4, result(), 'actor', fence),
+    ).rejects.toThrow();
+    expect(storage.delete).toHaveBeenCalledTimes(1);
+    expect(storage.delete).toHaveBeenCalledWith('patient/ocr/doc/run_new/new-page.png');
+  });
+
+  it.each([null, [], { '1': null }, { '1': { storagePath: 42 } }, { '1': { storagePath: '' } }])(
+    'preserves new files if persisted page metadata is malformed (%j)',
+    async (pageImages) => {
+      database.$transaction.mockRejectedValue(new Error('Uncertain transaction'));
+      database.documentOcrRun.findUnique.mockResolvedValue({ pageImages });
+      await expect(
+        service.completeProcessing('doc', 'patient', 4, result(), 'actor', fence),
+      ).rejects.toThrow();
+      expect(storage.delete).not.toHaveBeenCalled();
+    },
+  );
+
+  it('removes an unreferenced page after a locally rejected lease transaction', async () => {
+    database.documentProcessingJob.updateMany.mockResolvedValue({ count: 0 });
+    await expect(
+      service.completeProcessing('doc', 'patient', 4, result(), 'actor', fence),
+    ).rejects.toThrow(ConflictException);
+    expect(database.documentOcrRun.create).not.toHaveBeenCalled();
+    expect(storage.delete).toHaveBeenCalledWith('patient/ocr/doc/run_new/new-page.png');
+  });
+
+  it('removes incomplete private copies before any publication was attempted', async () => {
+    ia.getPageImage
+      .mockResolvedValueOnce(png)
+      .mockRejectedValueOnce(new Error('Temporarily unavailable'));
+    const twoPages = { ...onePage, pages: [...onePage.pages, { ...onePage.pages[0], page: 2 }] };
+    await expect(
+      service.completeProcessing(
+        'doc',
+        'patient',
+        4,
+        { ...result(), layout: twoPages },
+        'actor',
+        fence,
+      ),
+    ).rejects.toThrow('cache incomplete');
+    expect(database.$transaction).not.toHaveBeenCalled();
+    expect(storage.delete).toHaveBeenCalledWith('patient/ocr/doc/run_new/new-page.png');
+  });
+
+  it('raises a typed permanent publication limit before caching an oversized response', async () => {
+    // Only length is inspected before this early guard: no large allocation or OCR.
+    ia.getPageImage.mockResolvedValue({ length: 256 * 1024 * 1024 + 1 });
+    await expect(
+      service.completeProcessing('doc', 'patient', 4, result(), 'actor', fence),
+    ).rejects.toBeInstanceOf(OcrPublicationLimitError);
+    expect(database.$transaction).not.toHaveBeenCalled();
+    expect(storage.save).not.toHaveBeenCalled();
+  });
+
+  it('raises the same limit at an exactly full cache before fetching another page', async () => {
+    // Valid PNG with inert trailing bytes, reused for every page: 16 MiB total
+    // test memory, not a 256 MiB allocation. Sharp still checks real dimensions.
+    const padded = Buffer.concat([png, Buffer.alloc(16 * 1024 * 1024 - png.length)]);
+    ia.getPageImage.mockResolvedValue(padded);
+    const pages = Array.from({ length: 17 }, (_, index) => ({
+      ...onePage.pages[0],
+      page: index + 1,
+    }));
+    await expect(
+      service.completeProcessing(
+        'doc',
+        'patient',
+        4,
+        { ...result(), layout: { ...onePage, pages } },
+        'actor',
+        fence,
+      ),
+    ).rejects.toBeInstanceOf(OcrPublicationLimitError);
+    expect(ia.getPageImage).toHaveBeenCalledTimes(16);
+    expect(database.$transaction).not.toHaveBeenCalled();
+    expect(storage.delete).toHaveBeenCalledTimes(16);
+  });
+
+  it('keeps the legacy partial-cache behavior when no durable job fence exists', async () => {
+    ia.getPageImage.mockResolvedValue({ length: 256 * 1024 * 1024 + 1 });
+    await expect(
+      service.completeProcessing('doc', 'patient', 4, result(), 'actor'),
+    ).resolves.toBeUndefined();
+    expect(database.documentOcrRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ pageImages: {} }),
+    });
   });
 });

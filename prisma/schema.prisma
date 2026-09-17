@@ -483,12 +483,42 @@ model MedicalDocument {
   metadataRevisions DocumentMetadataRevision[]
   sourcedRecords ClinicalRecordSource[]
   ocrRuns DocumentOcrRun[]
+  processingJobs DocumentProcessingJob[]
 
   @@index([patientId, createdAt(sort: Desc)])
   @@index([status])
   @@index([status, reviewPriority, processedAt])
   @@index([assignedReviewerId, status])
   @@map("medical_documents")
+}
+
+// Mutable operational progress; clinical version fences protect result publication.
+model DocumentProcessingJob {
+  id String @id @default(uuid()) @db.Uuid
+  documentId String @map("document_id") @db.Uuid
+  documentVersion Int @map("document_version")
+  attempt Int
+  sourceSha256 String @map("source_sha256") @db.VarChar(64)
+  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(3)
+  status String @default("QUEUED") @db.VarChar(32)
+  progress Json
+  error Json?
+  createdBy String? @map("created_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  startedAt DateTime? @map("started_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  heartbeatAt DateTime? @map("heartbeat_at") @db.Timestamptz(3)
+  processingRunId String? @map("processing_run_id") @db.Uuid
+  nextPollAt DateTime @default(now()) @map("next_poll_at") @db.Timestamptz(3)
+  failures Int @default(0)
+  leaseToken String? @map("lease_token") @db.Uuid
+  leaseUntil DateTime? @map("lease_until") @db.Timestamptz(3)
+  document MedicalDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@unique([documentId, attempt])
+  @@index([status, nextPollAt])
+  @@map("document_processing_jobs")
 }
 
 // Original machine output and every spatial correction are append-only.

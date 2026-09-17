@@ -44,7 +44,6 @@ const mockService = {
   saveCorrection: jest.fn(),
   reject: jest.fn(),
   searchByKeyword: jest.fn(),
-  onModuleInit: jest.fn(),
 } satisfies Record<keyof MedicalDocumentsService, jest.Mock>;
 
 const req = { user: { sub: 'user-uuid' } };
@@ -129,7 +128,12 @@ describe('MedicalDocumentsController', () => {
     const response = makeResponse({ status: DocumentStatus.PROCESSED });
     mockService.process.mockResolvedValue(response);
     const result = await controller.process('patient-uuid', 'doc-uuid', req);
-    expect(mockService.process).toHaveBeenCalledWith('patient-uuid', 'doc-uuid', 'user-uuid');
+    expect(mockService.process).toHaveBeenCalledWith(
+      'patient-uuid',
+      'doc-uuid',
+      'user-uuid',
+      undefined,
+    );
     expect(result.status).toBe(DocumentStatus.PROCESSED);
   });
 

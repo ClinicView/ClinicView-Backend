@@ -41,6 +41,7 @@ import { RejectDocumentDto } from './dto/reject-document.dto';
 import { SearchDocumentsQueryDto } from './dto/search-documents-query.dto';
 import { ValidateDocumentDto } from './dto/validate-document.dto';
 import { ClinicalDocumentKind, DocumentClinicalMetadataDto } from './dto/document-metadata.dto';
+import { ProcessDocumentDto } from './dto/process-document.dto';
 
 const DEFAULT_UPLOAD_MAX_SIZE_MB = 20;
 
@@ -204,8 +205,9 @@ export class MedicalDocumentsController {
     @Param('patientId', ParseUUIDPipe) patientId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Request() req: AuthRequest,
+    @Body() dto: ProcessDocumentDto = {},
   ): Promise<DocumentResponseDto> {
-    return this.service.process(patientId, id, req.user.sub);
+    return this.service.process(patientId, id, req.user.sub, dto.expectedVersion);
   }
 
   @Patch(':id/validate')

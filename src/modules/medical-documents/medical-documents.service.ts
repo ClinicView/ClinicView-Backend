@@ -7,15 +7,13 @@ import {
   Injectable,
   Logger,
   NotFoundException,
-  OnModuleInit,
   UnsupportedMediaTypeException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { DocumentStatus, MedicalDocument, Prisma } from '@prisma/client';
-import { IaClientService } from '../../core/ia/ia-client.service';
 import { StorageService } from '../../core/storage/storage.service';
-import { OcrLayoutService } from './ocr-layout.service';
-import { NotificationsService } from '../notifications/notifications.service';
+import { ProcessingJobsService } from './processing-jobs.service';
+import { processingSnapshot } from './processing-job';
 import { CorrectDocumentDto } from './dto/correct-document.dto';
 import { DocumentResponseDto } from './dto/document-response.dto';
 import {
@@ -133,34 +131,14 @@ function buildSnippet(text: string | null, keyword: string): string | null {
 }
 
 @Injectable()
-export class MedicalDocumentsService implements OnModuleInit {
+export class MedicalDocumentsService {
   private readonly logger = new Logger(MedicalDocumentsService.name);
 
   constructor(
     private readonly repo: MedicalDocumentsRepository,
     private readonly storage: StorageService,
-    private readonly iaClient: IaClientService,
-    private readonly notifications: NotificationsService,
-    private readonly layouts: OcrLayoutService,
+    private readonly jobs: ProcessingJobsService,
   ) {}
-
-  /**
-   * Recuperación tras reinicio: los documentos que quedaron en PROCESSING
-   * pertenecen a un OCR que murió con el proceso anterior — se marcan FAILED
-   * para que puedan reintentarse desde la interfaz.
-   */
-  async onModuleInit(): Promise<void> {
-    try {
-      const recovered = await this.repo.failStaleProcessing();
-      if (recovered > 0) {
-        this.logger.warn(
-          `${recovered} documento(s) quedaron en PROCESSING tras un reinicio — marcados FAILED para reintento.`,
-        );
-      }
-    } catch (err) {
-      this.logger.error(`No se pudo recuperar documentos PROCESSING: ${String(err)}`);
-    }
-  }
 
   async upload(
     patientId: string,
@@ -249,7 +227,12 @@ export class MedicalDocumentsService implements OnModuleInit {
     return { document: doc, stream };
   }
 
-  async process(patientId: string, id: string, userId?: string): Promise<DocumentResponseDto> {
+  async process(
+    patientId: string,
+    id: string,
+    userId?: string,
+    expectedVersion?: number,
+  ): Promise<DocumentResponseDto> {
     const doc = await this.repo.findByIdAndPatient(id, patientId);
     if (!doc) throw new NotFoundException('Documento no encontrado.');
     if (!(await this.repo.isPatientActive(patientId))) {
@@ -257,97 +240,7 @@ export class MedicalDocumentsService implements OnModuleInit {
         'El paciente está desactivado. Reactívalo antes de procesar documentos.',
       );
     }
-    if (doc.status !== DocumentStatus.PENDING && doc.status !== DocumentStatus.FAILED) {
-      throw new ConflictException(`No se puede procesar un documento con estado ${doc.status}.`);
-    }
-
-    const processing = await this.repo.claimProcessing(id, patientId, doc.version, userId);
-    if (!processing) throw new ConflictException('El documento ya cambió o está siendo procesado.');
-
-    // El OCR puede tardar minutos: se ejecuta en segundo plano y se notifica
-    // al usuario al terminar. La respuesta vuelve de inmediato (PROCESSING).
-    void this.runProcessing(doc, processing.version, userId);
-
-    return this.toResponse(processing);
-  }
-
-  private async runProcessing(
-    doc: MedicalDocument,
-    processingVersion: number,
-    userId?: string,
-  ): Promise<void> {
-    const { id, patientId } = doc;
-    try {
-      const allowedMime = doc.mimeType as 'image/jpeg' | 'image/png' | 'application/pdf';
-      const fileBytes = await this.storage.readFile(doc.storagePath);
-      const result = await this.iaClient.process(id, fileBytes, allowedMime);
-
-      if (result.layout) {
-        await this.layouts.completeProcessing(
-          id,
-          patientId,
-          processingVersion,
-          { ...result, layout: result.layout },
-          userId,
-        );
-      } else {
-        const completed = await this.repo.finishProcessing(
-          id,
-          patientId,
-          processingVersion,
-          DocumentStatus.PROCESSED,
-          {
-            ocrText: result.ocrText,
-            nerEntities: result.entities as unknown as Prisma.InputJsonValue,
-            ...(result.metrics && {
-              metrics: result.metrics as unknown as Prisma.InputJsonValue,
-            }),
-            ocrConfidence: result.ocrConfidence,
-            confidenceLevel: result.confidenceLevel,
-            processedAt: new Date(),
-            ...(userId && { updatedBy: userId }),
-          },
-        );
-        if (!completed) return;
-      }
-
-      if (userId) {
-        await this.notifications
-          .notify({
-            userId,
-            type: 'DOCUMENT_PROCESSED',
-            title: 'Digitalización completada',
-            body: `«${doc.originalName}» ya tiene texto OCR y está listo para corregir.`,
-            patientId,
-            documentId: id,
-          })
-          .catch(() => this.logger.warn('No se pudo enviar la notificación de OCR completado.'));
-      }
-    } catch (err) {
-      this.logger.error(`Error procesando documento ${id}: ${String(err)}`);
-      const failed = await this.repo
-        .finishProcessing(id, patientId, processingVersion, DocumentStatus.FAILED, {
-          ...(userId && { updatedBy: userId }),
-        })
-        .catch((updateErr) =>
-          this.logger.error(`No se pudo marcar FAILED el documento ${id}: ${String(updateErr)}`),
-        );
-
-      if (!failed) return;
-
-      if (userId) {
-        await this.notifications
-          .notify({
-            userId,
-            type: 'DOCUMENT_FAILED',
-            title: 'Error en la digitalización',
-            body: `«${doc.originalName}» no pudo procesarse. Puedes reintentar desde el documento.`,
-            patientId,
-            documentId: id,
-          })
-          .catch(() => this.logger.warn('No se pudo enviar la notificación del fallo OCR.'));
-      }
-    }
+    return this.toResponse(await this.jobs.enqueue(doc, userId, expectedVersion));
   }
 
   async validate(
@@ -529,6 +422,7 @@ export class MedicalDocumentsService implements OnModuleInit {
 
   private toResponse(doc: MedicalDocumentWithAssignee): DocumentResponseDto {
     return {
+      processing: processingSnapshot(doc.processingJobs?.[0]),
       id: doc.id,
       clinicalMetadata: (doc.clinicalMetadata ?? {}) as DocumentClinicalMetadataDto,
       patientId: doc.patientId,

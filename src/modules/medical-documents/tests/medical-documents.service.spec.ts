@@ -6,11 +6,9 @@ import {
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentStatus, ReviewPriority } from '@prisma/client';
-import { IaClientService } from '../../../core/ia/ia-client.service';
 import { StorageService } from '../../../core/storage/storage.service';
-import { NotificationsService } from '../../notifications/notifications.service';
 import { MedicalDocumentsService } from '../medical-documents.service';
-import { OcrLayoutService } from '../ocr-layout.service';
+import { ProcessingJobsService } from '../processing-jobs.service';
 import { MedicalDocumentsRepository } from '../repositories/medical-documents.repository';
 
 const makeDoc = (overrides: Record<string, unknown> = {}) => ({
@@ -87,18 +85,7 @@ const mockStorage = {
   onModuleInit: jest.fn(),
 } satisfies Record<keyof StorageService, jest.Mock>;
 
-const mockIaClient = {
-  process: jest.fn(),
-  getPageImage: jest.fn(),
-  onModuleDestroy: jest.fn(),
-} satisfies Record<keyof IaClientService, jest.Mock>;
-
-const mockNotifications = {
-  notify: jest.fn(),
-  list: jest.fn(),
-  markRead: jest.fn(),
-  markAllRead: jest.fn(),
-};
+const mockJobs = { enqueue: jest.fn() };
 
 describe('MedicalDocumentsService', () => {
   let service: MedicalDocumentsService;
@@ -109,9 +96,7 @@ describe('MedicalDocumentsService', () => {
         MedicalDocumentsService,
         { provide: MedicalDocumentsRepository, useValue: mockRepo },
         { provide: StorageService, useValue: mockStorage },
-        { provide: IaClientService, useValue: mockIaClient },
-        { provide: NotificationsService, useValue: mockNotifications },
-        { provide: OcrLayoutService, useValue: { completeProcessing: jest.fn() } },
+        { provide: ProcessingJobsService, useValue: mockJobs },
       ],
     }).compile();
 
@@ -120,7 +105,7 @@ describe('MedicalDocumentsService', () => {
     // Por defecto el paciente está activo; los tests de inactivo lo sobreescriben.
     mockRepo.isPatientActive.mockResolvedValue(true);
     mockRepo.finishProcessing.mockResolvedValue(true);
-    mockNotifications.notify.mockResolvedValue(undefined);
+    mockJobs.enqueue.mockReset();
   });
 
   describe('upload', () => {
@@ -220,76 +205,36 @@ describe('MedicalDocumentsService', () => {
 
     it('lanza ConflictException si el estado no es PENDING ni FAILED', async () => {
       mockRepo.findByIdAndPatient.mockResolvedValue(makeDoc({ status: DocumentStatus.VALIDATED }));
+      mockJobs.enqueue.mockRejectedValue(new ConflictException('Estado no permitido'));
       await expect(service.process('patient-uuid', 'doc-uuid')).rejects.toThrow(ConflictException);
     });
 
-    it('devuelve PROCESSING de inmediato y completa a PROCESSED en segundo plano', async () => {
+    it('delega el encolado persistente con la versión esperada y devuelve PROCESSING', async () => {
       const doc = makeDoc();
       mockRepo.findByIdAndPatient.mockResolvedValue(doc);
-      mockRepo.claimProcessing.mockResolvedValue({
+      mockJobs.enqueue.mockResolvedValue({
         ...doc,
         status: DocumentStatus.PROCESSING,
         version: 1,
       });
 
-      mockIaClient.process.mockResolvedValue({
-        ocrText: 'texto extraído',
-        entities: [],
-        metrics: null,
-        ocrConfidence: 0.9,
-        confidenceLevel: 'HIGH',
-      });
-
-      const result = await service.process('patient-uuid', 'doc-uuid', 'user-uuid');
+      const result = await service.process('patient-uuid', 'doc-uuid', 'user-uuid', 0);
 
       // La respuesta HTTP es inmediata, con el documento en PROCESSING.
       expect(result.status).toBe(DocumentStatus.PROCESSING);
-      expect(mockRepo.claimProcessing).toHaveBeenCalledWith(
-        'doc-uuid',
-        'patient-uuid',
-        0,
-        'user-uuid',
-      );
-
-      // El trabajo en segundo plano actualiza a PROCESSED y notifica.
-      await new Promise(process.nextTick);
-      expect(mockRepo.finishProcessing).toHaveBeenCalledWith(
-        'doc-uuid',
-        'patient-uuid',
-        1,
-        DocumentStatus.PROCESSED,
-        expect.objectContaining({ ocrText: 'texto extraído' }),
-      );
-      expect(mockNotifications.notify).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'DOCUMENT_PROCESSED', userId: 'user-uuid' }),
-      );
+      expect(mockJobs.enqueue).toHaveBeenCalledWith(doc, 'user-uuid', 0);
+      expect(mockRepo.claimProcessing).not.toHaveBeenCalled();
+      expect(mockRepo.finishProcessing).not.toHaveBeenCalled();
     });
 
-    it('marca FAILED y notifica cuando el worker de IA falla', async () => {
+    it('no marca FAILED ni altera el documento si no puede confirmar el encolado', async () => {
       const doc = makeDoc();
       mockRepo.findByIdAndPatient.mockResolvedValue(doc);
-      mockRepo.claimProcessing.mockResolvedValue({
-        ...doc,
-        status: DocumentStatus.PROCESSING,
-        version: 1,
-      });
-
-      mockIaClient.process.mockRejectedValue(new Error('IA no disponible'));
-
-      const result = await service.process('patient-uuid', 'doc-uuid', 'user-uuid');
-      expect(result.status).toBe(DocumentStatus.PROCESSING);
-
-      await new Promise(process.nextTick);
-      expect(mockRepo.finishProcessing).toHaveBeenCalledWith(
-        'doc-uuid',
-        'patient-uuid',
-        1,
-        DocumentStatus.FAILED,
-        expect.anything(),
+      mockJobs.enqueue.mockRejectedValue(new Error('No se pudo confirmar'));
+      await expect(service.process('patient-uuid', 'doc-uuid', 'user-uuid', 0)).rejects.toThrow(
+        'No se pudo confirmar',
       );
-      expect(mockNotifications.notify).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'DOCUMENT_FAILED', userId: 'user-uuid' }),
-      );
+      expect(mockRepo.finishProcessing).not.toHaveBeenCalled();
     });
   });
 

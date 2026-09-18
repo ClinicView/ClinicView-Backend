@@ -75,6 +75,20 @@ export class ClinicalHistoryExportRecordDto {
   attachments: ClinicalRecordAttachmentResponseDto[];
 }
 
+export class ClinicalHistoryExportActorDto {
+  @ApiPropertyOptional({ type: String, nullable: true }) id: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) fullName: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) username: string | null;
+  @ApiPropertyOptional({ type: Boolean, nullable: true }) isActive: boolean | null;
+  @ApiProperty({ description: 'Nombre actual legible o ausencia explícita; no acredita profesión ni firma.' })
+  displayName: string;
+  @ApiProperty({
+    enum: ['CURRENT_DIRECTORY', 'UNAVAILABLE'],
+    description: 'El directorio actual no es una instantánea del nombre que existía en la fecha del evento.',
+  })
+  identitySource: 'CURRENT_DIRECTORY' | 'UNAVAILABLE';
+}
+
 export class ClinicalHistoryExportDocumentDto {
   @ApiProperty({ type: DocumentClinicalMetadataDto }) clinicalMetadata: DocumentClinicalMetadataDto;
   @ApiProperty({ type: [DocumentMetadataRevisionDto] })
@@ -97,12 +111,20 @@ export class ClinicalHistoryExportDocumentDto {
   @ApiPropertyOptional({ type: Date, nullable: true }) processedAt: Date | null;
   @ApiPropertyOptional({ type: Date, nullable: true }) correctedAt: Date | null;
   @ApiPropertyOptional({ type: String, nullable: true }) correctedById: string | null;
+  @ApiPropertyOptional({ type: () => ClinicalHistoryExportActorDto })
+  correctedByActor?: ClinicalHistoryExportActorDto;
   @ApiPropertyOptional({ type: Date, nullable: true }) reviewedAt: Date | null;
   @ApiPropertyOptional({ type: String, nullable: true }) reviewedBy: string | null;
+  @ApiPropertyOptional({ type: () => ClinicalHistoryExportActorDto })
+  reviewedByActor?: ClinicalHistoryExportActorDto;
   @ApiPropertyOptional({ type: Object, nullable: true }) validationChecklist: unknown;
   @ApiPropertyOptional({ type: Date, nullable: true }) validationAttestedAt: Date | null;
   @ApiPropertyOptional({ type: String, nullable: true }) createdBy: string | null;
+  @ApiPropertyOptional({ type: () => ClinicalHistoryExportActorDto })
+  createdByActor?: ClinicalHistoryExportActorDto;
   @ApiPropertyOptional({ type: String, nullable: true }) updatedBy: string | null;
+  @ApiPropertyOptional({ type: () => ClinicalHistoryExportActorDto })
+  updatedByActor?: ClinicalHistoryExportActorDto;
 }
 
 export class ClinicalHistoryExportEpisodeDto extends EpisodeDto {

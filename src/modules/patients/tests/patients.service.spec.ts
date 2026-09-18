@@ -486,6 +486,67 @@ describe('PatientsService', () => {
       );
     });
 
+    it('incluye nombres y usernames actuales sin convertirlos en identidad profesional o snapshot histórico', async () => {
+      repo.findClinicalHistoryForExport.mockResolvedValue({
+        ...snapshot,
+        documentActors: [
+          { id: 'creator-uuid', fullName: 'Lucía Registro', username: 'lregistro', isActive: true },
+          { id: 'corrector-uuid', fullName: 'Ana Corrección', username: 'acorreccion', isActive: false },
+          { id: 'reviewer-uuid', fullName: 'Raúl Revisión', username: 'rrevision', isActive: false },
+        ],
+      });
+
+      const result = await service.exportClinicalHistory(mockPatient.id, 'actor-uuid');
+      const document = result.documents[0];
+      expect(document.createdBy).toBe('creator-uuid');
+      expect(document.correctedById).toBe('corrector-uuid');
+      expect(document.reviewedBy).toBe('reviewer-uuid');
+      expect(document.updatedBy).toBe('reviewer-uuid');
+      expect(document.createdByActor).toEqual({
+        id: 'creator-uuid', fullName: 'Lucía Registro', username: 'lregistro',
+        displayName: 'Lucía Registro', isActive: true, identitySource: 'CURRENT_DIRECTORY',
+      });
+      expect(document.correctedByActor).toEqual({
+        id: 'corrector-uuid', fullName: 'Ana Corrección', username: 'acorreccion',
+        displayName: 'Ana Corrección', isActive: false, identitySource: 'CURRENT_DIRECTORY',
+      });
+      expect(document.reviewedByActor).toEqual({
+        id: 'reviewer-uuid', fullName: 'Raúl Revisión', username: 'rrevision',
+        displayName: 'Raúl Revisión', isActive: false, identitySource: 'CURRENT_DIRECTORY',
+      });
+      expect(document.updatedByActor).toEqual(document.reviewedByActor);
+      expect(result.patient).not.toHaveProperty('documentActors');
+      expect(document.correctedByActor).not.toHaveProperty('profession');
+      expect(document.correctedByActor).not.toHaveProperty('email');
+    });
+
+    it('conserva IDs desconocidos y declara explícitamente la falta de nombre, sin inventar un autor', async () => {
+      repo.findClinicalHistoryForExport.mockResolvedValue(snapshot);
+      const result = await service.exportClinicalHistory(mockPatient.id, 'actor-uuid');
+      expect(result.documents[0].correctedByActor).toEqual({
+        id: 'corrector-uuid', fullName: null, username: null, isActive: null,
+        displayName: 'Autor histórico no registrado', identitySource: 'UNAVAILABLE',
+      });
+      expect(result.documents[1].correctedByActor).toEqual({
+        id: null, fullName: null, username: null, isActive: null,
+        displayName: 'Autor histórico no registrado', identitySource: 'UNAVAILABLE',
+      });
+      expect(result.documents[1].reviewedByActor?.id).toBeNull();
+      expect(result.documents[1].clinicalText).toBeNull();
+    });
+
+    it('usa username si el nombre está vacío y conserva el estado inactivo', async () => {
+      repo.findClinicalHistoryForExport.mockResolvedValue({
+        ...snapshot,
+        documentActors: [{ id: 'creator-uuid', fullName: '  ', username: ' antiguo ', isActive: false }],
+      });
+      const result = await service.exportClinicalHistory(mockPatient.id, 'actor-uuid');
+      expect(result.documents[0].createdByActor).toEqual({
+        id: 'creator-uuid', fullName: null, username: 'antiguo', isActive: false,
+        displayName: '@antiguo', identitySource: 'CURRENT_DIRECTORY',
+      });
+    });
+
     it('exige actor autenticado antes de leer datos clínicos', async () => {
       await expect(service.exportClinicalHistory(mockPatient.id, '')).rejects.toThrow(
         UnauthorizedException,

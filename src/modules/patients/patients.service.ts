@@ -19,7 +19,10 @@ import {
 } from '../../common/validation/clinical-date';
 import { buildClinicalMediaContentUrl } from '../clinical-records/dto/record-attachment.dto';
 import { CreatePatientDto } from './dto/create-patient.dto';
-import { ClinicalHistoryExportResponseDto } from './dto/clinical-history-export-response.dto';
+import {
+  ClinicalHistoryExportActorDto,
+  ClinicalHistoryExportResponseDto,
+} from './dto/clinical-history-export-response.dto';
 import { FindPatientsQueryDto } from './dto/find-patients-query.dto';
 import { PatientResponseDto } from './dto/patient-response.dto';
 import {
@@ -31,7 +34,7 @@ import { UpdatePatientDto } from './dto/update-patient.dto';
 import { normalizePatientContext } from './dto/patient-context.dto';
 import { ClinicalSummaryPayloadDto } from './dto/clinical-summary.dto';
 import { DocumentClinicalMetadataDto } from '../medical-documents/dto/document-metadata.dto';
-import { PatientsRepository } from './repositories/patients.repository';
+import { ClinicalHistoryExportActor, PatientsRepository } from './repositories/patients.repository';
 
 export interface PaginatedResponse<T> {
   data: T[];
@@ -47,6 +50,23 @@ function isPrismaErrorCode(error: unknown, code: string): boolean {
     'code' in error &&
     (error as { code?: unknown }).code === code,
   );
+}
+
+function exportActor(
+  id: string | null,
+  actors: Map<string, ClinicalHistoryExportActor>,
+): ClinicalHistoryExportActorDto {
+  const actor = id ? actors.get(id) : undefined;
+  const fullName = actor?.fullName.trim() || null;
+  const username = actor?.username.trim() || null;
+  return {
+    id,
+    fullName,
+    username,
+    isActive: actor?.isActive ?? null,
+    displayName: fullName || (username ? `@${username}` : 'Autor histórico no registrado'),
+    identitySource: actor ? 'CURRENT_DIRECTORY' : 'UNAVAILABLE',
+  };
 }
 
 @Injectable()
@@ -209,8 +229,10 @@ export class PatientsService {
       medicalDocuments,
       clinicalSummaryRevisions = [],
       clinicalEpisodes = [],
+      documentActors = [],
       ...patient
     } = snapshot;
+    const actorsById = new Map(documentActors.map((actor) => [actor.id, actor]));
 
     const result = applyClinicalHistoryScope(
       {
@@ -327,12 +349,16 @@ export class PatientsService {
             processedAt: document.processedAt,
             correctedAt: document.correctedAt,
             correctedById: document.correctedById,
+            correctedByActor: exportActor(document.correctedById, actorsById),
             reviewedAt: document.reviewedAt,
             reviewedBy: document.reviewedBy,
+            reviewedByActor: exportActor(document.reviewedBy, actorsById),
             validationChecklist: document.validationChecklist,
             validationAttestedAt: document.validationAttestedAt,
             createdBy: document.createdBy,
+            createdByActor: exportActor(document.createdBy, actorsById),
             updatedBy: document.updatedBy,
+            updatedByActor: exportActor(document.updatedBy, actorsById),
           };
         }),
         generatedAt: new Date(),

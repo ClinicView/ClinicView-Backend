@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { DocumentType, Patient, PatientRegistrationDraft, Prisma } from '@prisma/client';
+import { DocumentType, Patient, PatientRegistrationDraft, Prisma, User } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
 
 const clinicalHistoryExportArgs = {
@@ -121,7 +121,9 @@ const clinicalHistoryExportArgs = {
 
 export type PatientClinicalHistoryExport = Prisma.PatientGetPayload<
   typeof clinicalHistoryExportArgs
->;
+> & { documentActors?: ClinicalHistoryExportActor[] };
+
+export type ClinicalHistoryExportActor = Pick<User, 'id' | 'fullName' | 'username' | 'isActive'>;
 
 export interface FindManyOptions {
   search?: string;
@@ -277,11 +279,27 @@ export class PatientsRepository {
 
   async findClinicalHistoryForExport(id: string): Promise<PatientClinicalHistoryExport | null> {
     return this.prisma.$transaction(
-      (transaction) =>
-        transaction.patient.findUnique({
+      async (transaction) => {
+        const snapshot = await transaction.patient.findUnique({
           where: { id },
           ...clinicalHistoryExportArgs,
-        }),
+        });
+        if (!snapshot) return null;
+        // These historical UUID columns have no Prisma user relations. Resolve
+        // the complete identity set once in the same snapshot, not per document.
+        // Inactive accounts still identify their historical actions.
+        const actorIds = [...new Set(snapshot.medicalDocuments.flatMap((document) =>
+          [document.createdBy, document.correctedById, document.reviewedBy, document.updatedBy]
+            .filter((actorId): actorId is string => actorId !== null),
+        ))];
+        const documentActors = actorIds.length
+          ? await transaction.user.findMany({
+              where: { id: { in: actorIds } },
+              select: { id: true, fullName: true, username: true, isActive: true },
+            })
+          : [];
+        return { ...snapshot, documentActors };
+      },
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
   }

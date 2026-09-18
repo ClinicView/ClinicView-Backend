@@ -3,6 +3,49 @@ import { PrismaService } from '../../../database/prisma.service';
 import { PatientsRepository } from '../repositories/patients.repository';
 
 describe('PatientsRepository export snapshot', () => {
+  it('resuelve los cuatro responsables en un lote dentro de la instantánea, incluidos inactivos', async () => {
+    const snapshot = {
+      id: 'patient',
+      medicalDocuments: [
+        { createdBy: 'creator', correctedById: 'corrector', reviewedBy: 'reviewer', updatedBy: 'updater' },
+        { createdBy: 'creator', correctedById: 'corrector', reviewedBy: 'reviewer', updatedBy: 'reviewer' },
+        { createdBy: null, correctedById: null, reviewedBy: null, updatedBy: null },
+      ],
+    };
+    const actor = { id: 'reviewer', fullName: 'Ana Revisora', username: 'arevisora', isActive: false };
+    const findMany = jest.fn().mockResolvedValue([actor]);
+    const transactionClient = {
+      patient: { findUnique: jest.fn().mockResolvedValue(snapshot) },
+      user: { findMany },
+    };
+    const transaction = jest.fn(async (callback: (client: typeof transactionClient) => Promise<unknown>) => callback(transactionClient));
+    const repository = new PatientsRepository({ $transaction: transaction } as unknown as PrismaService);
+
+    const result = await repository.findClinicalHistoryForExport('patient');
+
+    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['creator', 'corrector', 'reviewer', 'updater'] } },
+      select: { id: true, fullName: true, username: true, isActive: true },
+    });
+    expect(result?.documentActors).toEqual([actor]);
+    expect(transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+    });
+  });
+
+  it.each([{ medicalDocuments: [] }, { medicalDocuments: [{ createdBy: null, correctedById: null, reviewedBy: null, updatedBy: null }] }])(
+    'omite la consulta de usuarios si no hay identificadores históricos: %j',
+    async ({ medicalDocuments }) => {
+      const findMany = jest.fn();
+      const client = { patient: { findUnique: jest.fn().mockResolvedValue({ medicalDocuments }) }, user: { findMany } };
+      const repository = new PatientsRepository({ $transaction: async (callback: (transactionClient: typeof client) => Promise<unknown>) => callback(client) } as unknown as PrismaService);
+      const result = await repository.findClinicalHistoryForExport('patient');
+      expect(result?.documentActors).toEqual([]);
+      expect(findMany).not.toHaveBeenCalled();
+    },
+  );
+
   it('lee la historia dentro de una transacción repeatable-read', async () => {
     const findUnique = jest.fn().mockResolvedValue(null);
     const transactionClient = { patient: { findUnique } };

@@ -3,7 +3,8 @@
  * Siembra roles base, capacidades (permisos) y, opcionalmente, el usuario administrador inicial.
  *
  * Reglas:
- * - Idempotente: re-ejecutar no duplica ni pierde datos (upsert).
+ * - Create-only: re-ejecutar conserva nombres, permisos y cuentas administrados.
+ * - Los permisos predeterminados se asignan SOLO al crear un rol, de forma atómica.
  * - Sin datos clínicos reales ni PII/PHI.
  * - Fuente de verdad de roles y permisos: docs/database/README.md §2 + modules/README.md.
  * - El admin inicial se crea SOLO si ADMIN_EMAIL y ADMIN_PASSWORD están en el entorno.
@@ -12,6 +13,7 @@
  */
 import * as bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
+import { seedAccessCatalog, seedInitialAdministrator } from './seed-access';
 
 const prisma = new PrismaClient();
 
@@ -169,54 +171,11 @@ const ROLE_PERMISSIONS: Record<string, PermissionKey[]> = {
 
 async function main(): Promise<void> {
   console.log('🌱 Iniciando seed de roles y permisos...\n');
-
-  // 1. Permisos
-  for (const permission of PERMISSIONS) {
-    await prisma.permission.upsert({
-      where: { key: permission.key },
-      update: { description: permission.description },
-      create: { key: permission.key, description: permission.description },
-    });
-  }
-  console.log(`  ✓ ${PERMISSIONS.length} permisos sembrados`);
-
-  // 2. Roles
-  for (const role of ROLES) {
-    await prisma.role.upsert({
-      where: { key: role.key },
-      update: { name: role.name, description: role.description },
-      create: { key: role.key, name: role.name, description: role.description },
-    });
-  }
-  console.log(`  ✓ ${ROLES.length} roles sembrados`);
-
-  // 3. Asignaciones rol → permisos (idempotente por clave compuesta)
-  let assignCount = 0;
-  for (const [roleKey, permKeys] of Object.entries(ROLE_PERMISSIONS)) {
-    const role = await prisma.role.findUniqueOrThrow({ where: { key: roleKey } });
-
-    for (const permKey of permKeys) {
-      const permission = await prisma.permission.findUniqueOrThrow({ where: { key: permKey } });
-      await prisma.rolePermission.upsert({
-        where: {
-          roleId_permissionId: { roleId: role.id, permissionId: permission.id },
-        },
-        update: {},
-        create: { roleId: role.id, permissionId: permission.id },
-      });
-      assignCount++;
-    }
-  }
-  console.log(`  ✓ ${assignCount} asignaciones de permisos sembradas`);
-
-  // Resumen
-  console.log('\n📋 Resumen:');
-  for (const roleKey of Object.keys(ROLE_PERMISSIONS)) {
-    const count = ROLE_PERMISSIONS[roleKey].length;
-    console.log(`   ${roleKey}: ${count} permisos`);
-  }
-
-  console.log('\n✅ Seed de roles y permisos completado.');
+  const result = await seedAccessCatalog(prisma, ROLES, PERMISSIONS, ROLE_PERMISSIONS);
+  console.log(`  ✓ ${result.permissionsEnsured} capacidades comprobadas sin reemplazar descripciones existentes`);
+  console.log(`  ✓ ${result.rolesCreated} roles creados; ${result.rolesPreserved} roles existentes conservados`);
+  console.log(`  ✓ ${result.grantsCreated} permisos iniciales asignados solo a roles nuevos`);
+  console.log('\n✅ Catálogo inicial preparado; las decisiones administrativas previas se conservan.');
 
   // 4. Admin inicial (opcional — requiere ADMIN_EMAIL + ADMIN_PASSWORD en el entorno)
   await seedAdminUser();
@@ -225,12 +184,6 @@ async function main(): Promise<void> {
 async function seedAdminUser(): Promise<void> {
   const email = process.env.ADMIN_EMAIL?.trim();
   const password = process.env.ADMIN_PASSWORD;
-  const fullName = process.env.ADMIN_FULL_NAME?.trim() ?? 'Administrador del Sistema';
-  const [firstName, ...lastNameParts] = fullName.split(' ');
-  const username =
-    process.env.ADMIN_USERNAME?.trim() ??
-    email?.split('@')[0]?.replace(/[^a-zA-Z0-9._-]/g, '').toLowerCase() ??
-    'admin';
 
   if (!email || !password) {
     console.log('\n⚠️  ADMIN_EMAIL o ADMIN_PASSWORD no definidos.');
@@ -238,37 +191,25 @@ async function seedAdminUser(): Promise<void> {
     return;
   }
 
-  const adminRole = await prisma.role.findUniqueOrThrow({ where: { key: 'ADMINISTRADOR' } });
-  const passwordHash = await bcrypt.hash(password, 12);
-
-  const admin = await prisma.user.upsert({
-    where: { email },
-    update: {},  // Si ya existe, no sobreescribir — el admin gestiona su propia contraseña.
-    create: {
-      email,
-      username,
-      firstName: firstName || 'Administrador',
-      lastName: lastNameParts.join(' ') || 'Sistema',
-      fullName,
-      profession: 'Administrador del sistema',
-      passwordHash,
-    },
-  });
-
-  await prisma.userRole.upsert({
-    where: { userId_roleId: { userId: admin.id, roleId: adminRole.id } },
-    update: {},
-    create: { userId: admin.id, roleId: adminRole.id },
-  });
-
-  // No loguear contraseña ni hash.
-  console.log(`\n✅ Admin inicial listo — email: ${email}, rol: ADMINISTRADOR`);
+  const result = await seedInitialAdministrator(prisma, {
+    email,
+    password,
+    fullName: process.env.ADMIN_FULL_NAME,
+    username: process.env.ADMIN_USERNAME,
+  }, (value) => bcrypt.hash(value, 12));
+  // No imprimir correo, contraseña ni hash. Un email existente NO es un nuevo admin.
+  console.log(result === 'created'
+    ? '\n✅ Cuenta administrativa inicial creada con su rol.'
+    : '\nℹ️  La cuenta indicada ya existía; se conservaron su estado, contraseña y roles sin cambios.');
 }
 
 main()
   .catch((error: unknown) => {
-    console.error('\n❌ Error en seed:', error);
-    process.exit(1);
+    const code = typeof error === 'object' && error !== null && 'code' in error
+      && typeof error.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.code)
+      ? error.code : 'SEED_FAILED';
+    console.error(`\n❌ No se pudo completar el seed (${code}). Se omiten detalles que podrían contener datos de cuentas.`);
+    process.exitCode = 1;
   })
   .finally(async () => {
     await prisma.$disconnect();

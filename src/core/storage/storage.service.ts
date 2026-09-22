@@ -1,5 +1,5 @@
-import { createReadStream, mkdirSync, ReadStream } from 'fs';
-import { readFile, unlink, writeFile } from 'fs/promises';
+import { constants, createReadStream, mkdirSync, ReadStream } from 'fs';
+import { access, readFile, stat, statfs, unlink, writeFile } from 'fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'path';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -21,6 +21,15 @@ export class StorageService implements OnModuleInit {
     mkdirSync(dirname(absolutePath), { recursive: true });
     await writeFile(absolutePath, buffer);
     return relativePath;
+  }
+
+  /** Read-only readiness: directory, access permissions and nonzero free capacity. */
+  async checkReady(): Promise<void> {
+    const metadata = await stat(this.uploadDir);
+    if (!metadata.isDirectory()) throw new Error('Private storage unavailable.');
+    await access(this.uploadDir, constants.R_OK | constants.W_OK);
+    const capacity = await statfs(this.uploadDir);
+    if (capacity.bavail <= 0) throw new Error('Private storage unavailable.');
   }
 
   createReadStream(relativePath: string): ReadStream {

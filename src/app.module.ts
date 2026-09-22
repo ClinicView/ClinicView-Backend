@@ -5,6 +5,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import configuration from './config/configuration';
+import { validateEnvironment } from './config/environment';
 import { HashingModule } from './core/security/hashing.module';
 import { RequestContextModule } from './core/request-context/request-context.module';
 import { PrismaModule } from './database/prisma.module';
@@ -29,7 +30,12 @@ import { GlobalSearchModule } from './modules/search/global-search.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, load: [configuration], envFilePath: '.env' }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      load: [configuration],
+      envFilePath: '.env',
+      validate: validateEnvironment,
+    }),
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 120 }]),
     PrismaModule,
     RequestContextModule,

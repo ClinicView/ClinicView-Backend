@@ -1,10 +1,10 @@
 # ClinicView — Backend
 
-API REST de la plataforma clínica hospitalaria **ClinicView**, construida con NestJS 10, TypeScript y Prisma sobre PostgreSQL.
+API REST de la plataforma clínica hospitalaria **ClinicView**, construida con NestJS 11, TypeScript y Prisma sobre PostgreSQL.
 
 ## Tecnologías
 
-- [NestJS 10](https://nestjs.com/)
+- [NestJS 11](https://nestjs.com/) y Express 5
 - TypeScript
 - [Prisma](https://www.prisma.io/) (ORM + migraciones)
 - PostgreSQL
@@ -13,7 +13,7 @@ API REST de la plataforma clínica hospitalaria **ClinicView**, construida con N
 
 ## Requisitos
 
-- Node.js 20.18.1 o superior (según `engines` de `package.json`)
+- Node.js 20.19.0 o superior (según `engines` de `package.json`); Node 24 recomendado para ejecutar también las pruebas de navegador/PDF del frontend
 - npm
 - PostgreSQL
 
@@ -44,6 +44,11 @@ cp .env.example .env
 | `UPLOAD_DIR` | Directorio de archivos subidos |
 | `ADMIN_EMAIL` | Email del administrador inicial |
 | `ADMIN_PASSWORD` | Contraseña del administrador inicial |
+
+Controles del código y sus límites: [configuración y disponibilidad](docs/LOCAL-RUNTIME-HARDENING.md),
+[inicialización que conserva las decisiones del administrador](docs/BOOTSTRAP-PRESERVATION.md)
+y [compatibilidad y auditoría de dependencias](docs/DEPENDENCY-SECURITY.md).
+Estos cambios se verifican en local; no configuran infraestructura de despliegue.
 
 ## Base de datos
 

@@ -1,13 +1,17 @@
 import { createReadStream, mkdirSync } from 'fs';
-import { readFile, unlink, writeFile } from 'fs/promises';
+import { access, readFile, stat, statfs, unlink, writeFile } from 'fs/promises';
 import { ConfigService } from '@nestjs/config';
 import { StorageService } from './storage.service';
 
 jest.mock('fs', () => ({
+  constants: { R_OK: 4, W_OK: 2 },
   createReadStream: jest.fn(),
   mkdirSync: jest.fn(),
 }));
 jest.mock('fs/promises', () => ({
+  access: jest.fn(),
+  stat: jest.fn(),
+  statfs: jest.fn(),
   readFile: jest.fn(),
   unlink: jest.fn(),
   writeFile: jest.fn(),
@@ -67,5 +71,19 @@ describe('StorageService', () => {
     );
     expect(mockedReadFile).not.toHaveBeenCalled();
     expect(mockedWriteFile).not.toHaveBeenCalled();
+  });
+
+  it('readiness verifica directorio, permisos y espacio sin escribir ni leer archivos clínicos', async () => {
+    (stat as jest.Mock).mockResolvedValue({ isDirectory: () => true });
+    (access as jest.Mock).mockResolvedValue(undefined);
+    (statfs as jest.Mock).mockResolvedValue({ bavail: 100 });
+    await expect(service.checkReady()).resolves.toBeUndefined();
+    expect(access).toHaveBeenCalledWith(expect.any(String), 6);
+    expect(mockedWriteFile).not.toHaveBeenCalled();
+    expect(mockedReadFile).not.toHaveBeenCalled();
+    (statfs as jest.Mock).mockResolvedValue({ bavail: 0 });
+    await expect(service.checkReady()).rejects.toThrow('unavailable');
+    (stat as jest.Mock).mockResolvedValue({ isDirectory: () => false });
+    await expect(service.checkReady()).rejects.toThrow('unavailable');
   });
 });

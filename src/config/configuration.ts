@@ -29,6 +29,10 @@ export default () => ({
   port: parseInt(process.env.PORT ?? '3001', 10),
   nodeEnv: process.env.NODE_ENV ?? 'development',
   frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:3000',
+  health: {
+    requireIa: process.env.READY_REQUIRE_IA === 'true',
+    timeoutMs: boundedInteger(process.env.HEALTH_TIMEOUT_MS, 3000, 250, 10000),
+  },
   database: {
     url: process.env.DATABASE_URL,
   },

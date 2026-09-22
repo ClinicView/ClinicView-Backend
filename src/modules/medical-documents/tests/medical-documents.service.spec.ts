@@ -78,6 +78,7 @@ const mockRepo = {
 } satisfies Record<keyof MedicalDocumentsRepository, jest.Mock>;
 
 const mockStorage = {
+  checkReady: jest.fn(),
   save: jest.fn(),
   createReadStream: jest.fn(),
   readFile: jest.fn(),

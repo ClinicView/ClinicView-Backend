@@ -3,6 +3,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { REFRESH_COOKIE_NAME } from './modules/auth/refresh-cookie';
 import { json } from 'express';
 import type { NextFunction, Request, Response } from 'express';
+import { trustProxyHops } from './config/environment';
 
 export interface AppSetupOptions {
   enableSwagger?: boolean;
@@ -14,6 +15,11 @@ export interface AppSetupOptions {
  */
 export function setupApp(app: INestApplication, options: AppSetupOptions = {}): void {
   app.setGlobalPrefix('api');
+  // One trusted hop is opt-in. The API must not be directly reachable when enabled.
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .set('trust proxy', trustProxyHops(process.env.TRUST_PROXY_HOPS));
   // A page-by-page provenance snapshot can exceed Express's 100 kB default.
   // Keep the larger bound local to this DTO-validated endpoint.
   const spatialReviewJson = json({ limit: '4mb' });
@@ -35,12 +41,12 @@ export function setupApp(app: INestApplication, options: AppSetupOptions = {}): 
   );
 
   app.enableCors({
-    origin: process.env.FRONTEND_URL ?? 'http://localhost:3000',
+    origin: (process.env.FRONTEND_URL ?? 'http://localhost:3000').replace(/\/$/, ''),
     credentials: true,
     exposedHeaders: ['X-Request-Id'],
   });
 
-  if (options.enableSwagger === false) return;
+  if (process.env.NODE_ENV === 'production' || options.enableSwagger === false) return;
 
   const document = SwaggerModule.createDocument(app, createSwaggerConfig());
   SwaggerModule.setup('api/docs', app, document, {

@@ -29,7 +29,9 @@ describe('IA process HTTP transport (real local sockets, no OCR)', () => {
           ? `http://127.0.0.1:${port}`
           : key === 'ia.processTimeoutMs'
             ? timeout
-            : fallback,
+            : key === 'ia.internalApiKey'
+              ? 'unit-test-internal-key-at-least-32-characters'
+              : fallback,
     } as unknown as ConfigService);
   }
 
@@ -53,6 +55,9 @@ describe('IA process HTTP transport (real local sockets, no OCR)', () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         method: 'POST',
+        headers: expect.objectContaining({
+          'X-IA-Internal-Key': 'unit-test-internal-key-at-least-32-characters',
+        }),
         path: '/v1/process',
         headersTimeout: 1800000,
         bodyTimeout: 1800000,
@@ -121,6 +126,24 @@ describe('IA process HTTP transport (real local sockets, no OCR)', () => {
     await setup(1000, (request) => request.socket.destroy());
     await expect(process()).rejects.toThrow();
     expect(requests).toBe(1);
+  });
+
+  it('does not echo a worker error body containing sensitive material', async () => {
+    await setup(1000, (_request, response) => {
+      response.writeHead(500);
+      response.end(JSON.stringify({ detail: 'SECRET-patient-source-token' }));
+    });
+    await expect(process()).rejects.toThrow('IA process failed with status 500.');
+  });
+
+  it('rejects a missing internal key before issuing a legacy OCR request', async () => {
+    await setup(1000, (_request, response) => response.end(payload));
+    await service.onModuleDestroy();
+    service = new IaClientService({
+      get: (_key: string, fallback: unknown) => fallback,
+    } as ConfigService);
+    await expect(process()).rejects.toThrow('IA internal access is not configured');
+    expect(requests).toBe(0);
   });
 
   it('releases the private agent and aborts a pending request on module shutdown', async () => {

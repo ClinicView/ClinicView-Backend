@@ -144,7 +144,7 @@ export class IaClientService implements OnModuleDestroy {
       origin: endpoint.origin,
       path: `${endpoint.pathname}${endpoint.search}`,
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-IA-Internal-Key': this.internalApiKey() },
       body,
       headersTimeout: this.processTimeoutMs,
       bodyTimeout: this.processTimeoutMs,
@@ -154,11 +154,11 @@ export class IaClientService implements OnModuleDestroy {
 
     // Agent.request has no redirect/retry interceptor: 3xx/5xx are not replayed.
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      const detail = await this.readErrorDetail(res.body);
-      this.logger.warn(
-        `IA worker respondio ${res.statusCode} para documento ${documentId}: ${detail}`,
-      );
-      throw new Error(`IA process failed with status ${res.statusCode}: ${detail}`);
+      // A worker error can contain source text or internal secrets. Never echo it.
+      res.body.on('error', () => undefined);
+      res.body.destroy();
+      this.logger.warn(`IA worker respondio ${res.statusCode} para documento ${documentId}.`);
+      throw new Error(`IA process failed with status ${res.statusCode}.`);
     }
 
     const data = (await res.body.json()) as RawProcessResponse;
@@ -296,9 +296,7 @@ export class IaClientService implements OnModuleDestroy {
     payload?: object,
   ): Promise<unknown> {
     if (!IA_JOB_UUID.test(jobId) || (result && method !== 'GET')) throw new IaJobProtocolError();
-    const key = this.configService.get<string>('ia.internalApiKey');
-    if (typeof key !== 'string' || key.length < 32)
-      throw new Error('IA internal job access is not configured.');
+    const key = this.internalApiKey();
     const endpoint = new URL(
       `${this.baseUrl.replace(/\/$/, '')}/v1/jobs/${jobId}${result ? '/result' : ''}`,
     );
@@ -353,6 +351,13 @@ export class IaClientService implements OnModuleDestroy {
     } catch {
       throw new IaJobProtocolError();
     }
+  }
+
+  private internalApiKey(): string {
+    const key = this.configService.get<string>('ia.internalApiKey');
+    if (typeof key !== 'string' || key.length < 32)
+      throw new Error('IA internal access is not configured.');
+    return key;
   }
 
   private normalizeProcessResult(data: RawProcessResponse): ProcessResult {
@@ -439,21 +444,5 @@ export class IaClientService implements OnModuleDestroy {
   private normalizeLevel(level: string | undefined): ConfidenceLevel | null {
     if (level === 'HIGH' || level === 'MEDIUM' || level === 'LOW') return level;
     return null;
-  }
-
-  private async readErrorDetail(res: { text(): Promise<string> }): Promise<string> {
-    const fallback = 'Error no especificado por el worker IA.';
-
-    try {
-      const raw = await res.text();
-      if (!raw.trim()) return fallback;
-
-      const parsed = JSON.parse(raw) as { detail?: unknown };
-      return typeof parsed.detail === 'string' && parsed.detail.trim()
-        ? parsed.detail
-        : raw.slice(0, 500);
-    } catch {
-      return fallback;
-    }
   }
 }

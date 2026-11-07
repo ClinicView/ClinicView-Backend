@@ -199,6 +199,7 @@ export class PatientsService {
     const skip = (page - 1) * limit;
 
     const { data, total } = await this.patientsRepository.findMany({
+      status: query.status,
       search: query.search,
       documentType: query.documentType,
       documentNumber: query.documentNumber,

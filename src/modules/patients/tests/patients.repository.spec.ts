@@ -1,6 +1,85 @@
 import { DocumentType, Prisma, Sex } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
+import { PatientListStatus } from '../dto/find-patients-query.dto';
 import { PatientsRepository } from '../repositories/patients.repository';
+
+describe('PatientsRepository status filtering', () => {
+  function setup() {
+    const findMany = jest.fn().mockResolvedValue([{ id: 'patient', isActive: false }]);
+    const count = jest.fn().mockResolvedValue(21);
+    const repository = new PatientsRepository({
+      patient: { findMany, count },
+      $transaction: (queries: Promise<unknown>[]) => Promise.all(queries),
+    } as unknown as PrismaService);
+    return { repository, findMany, count };
+  }
+
+  it.each([
+    [undefined, [{ isActive: true }]],
+    [PatientListStatus.ACTIVE, [{ isActive: true }]],
+    [PatientListStatus.INACTIVE, [{ isActive: false }]],
+    [PatientListStatus.ALL, []],
+  ] as const)('filtra %s de la misma manera para filas y total', async (status, conditions) => {
+    const { repository, findMany, count } = setup();
+
+    const result = await repository.findMany({ status, skip: 20, take: 10 });
+
+    expect(findMany).toHaveBeenCalledWith({
+      where: { AND: conditions },
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      skip: 20,
+      take: 10,
+    });
+    expect(count).toHaveBeenCalledWith({ where: { AND: conditions } });
+    expect(result).toEqual({ data: [{ id: 'patient', isActive: false }], total: 21 });
+  });
+
+  it.each(Object.values(PatientListStatus))(
+    'conserva la búsqueda por nombre/documento al filtrar %s',
+    async (status) => {
+      const { repository, findMany, count } = setup();
+      const conditions = status === PatientListStatus.ALL
+        ? []
+        : [{ isActive: status === PatientListStatus.ACTIVE }];
+      const where = {
+        AND: [
+          ...conditions,
+          {
+            OR: [
+              { firstName: { contains: 'García', mode: 'insensitive' } },
+              { lastName: { contains: 'García', mode: 'insensitive' } },
+              { documentNumber: { contains: 'García', mode: 'insensitive' } },
+            ],
+          },
+        ],
+      };
+
+      await repository.findMany({ status, search: 'García', skip: 0, take: 20 });
+
+      expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where }));
+      expect(count).toHaveBeenCalledWith({ where });
+    },
+  );
+
+  it('combina el documento exacto con inactivos sin ampliar la búsqueda', async () => {
+    const { repository, findMany, count } = setup();
+    const where = {
+      AND: [{ isActive: false }, { documentType: DocumentType.DNI, documentNumber: '12345678' }],
+    };
+
+    await repository.findMany({
+      status: PatientListStatus.INACTIVE,
+      documentType: DocumentType.DNI,
+      documentNumber: '12345678',
+      search: 'García',
+      skip: 0,
+      take: 20,
+    });
+
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where }));
+    expect(count).toHaveBeenCalledWith({ where });
+  });
+});
 
 describe('PatientsRepository export snapshot', () => {
   it('resuelve los cuatro responsables en un lote dentro de la instantánea, incluidos inactivos', async () => {

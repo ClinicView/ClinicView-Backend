@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentType, Patient, PatientRegistrationDraft, Sex } from '@prisma/client';
 import { CreatePatientDto } from '../dto/create-patient.dto';
+import { PatientListStatus } from '../dto/find-patients-query.dto';
 import { UpdatePatientDto } from '../dto/update-patient.dto';
 import { PatientsRepository } from '../repositories/patients.repository';
 import { PatientsService } from '../patients.service';
@@ -237,6 +238,35 @@ describe('PatientsService', () => {
       expect(result.total).toBe(1);
       expect(result.page).toBe(1);
       expect(result.limit).toBe(20);
+    });
+
+    it('propaga estado, búsqueda y página sin descartar los pacientes inactivos', async () => {
+      repo.findMany.mockResolvedValue({
+        data: [{ ...mockPatient, isActive: false }],
+        total: 21,
+      });
+
+      const result = await service.findAll({
+        status: PatientListStatus.INACTIVE,
+        search: 'García',
+        page: 3,
+        limit: 10,
+      });
+
+      expect(repo.findMany).toHaveBeenCalledWith({
+        status: PatientListStatus.INACTIVE,
+        search: 'García',
+        documentType: undefined,
+        documentNumber: undefined,
+        skip: 20,
+        take: 10,
+      });
+      expect(result).toMatchObject({
+        data: [{ id: mockPatient.id, isActive: false }],
+        total: 21,
+        page: 3,
+        limit: 10,
+      });
     });
   });
 

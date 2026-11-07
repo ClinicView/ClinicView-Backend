@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DocumentType, Patient, PatientRegistrationDraft, Prisma, User } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
+import type { PatientListStatus } from '../dto/find-patients-query.dto';
 
 const clinicalHistoryExportArgs = {
   select: {
@@ -126,6 +127,7 @@ export type PatientClinicalHistoryExport = Prisma.PatientGetPayload<
 export type ClinicalHistoryExportActor = Pick<User, 'id' | 'fullName' | 'username' | 'isActive'>;
 
 export interface FindManyOptions {
+  status?: PatientListStatus;
   search?: string;
   documentType?: DocumentType;
   documentNumber?: string;
@@ -366,7 +368,10 @@ export class PatientsRepository {
   }
 
   private buildWhere(options: FindManyOptions): Prisma.PatientWhereInput {
-    const conditions: Prisma.PatientWhereInput[] = [{ isActive: true }];
+    const conditions: Prisma.PatientWhereInput[] = [];
+    if (options.status !== 'all') {
+      conditions.push({ isActive: options.status !== 'inactive' });
+    }
 
     if (options.documentType && options.documentNumber) {
       conditions.push({

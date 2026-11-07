@@ -119,7 +119,7 @@ export class PatientsController {
   @Get()
   @RequirePermissions('patients.read')
   @ApiOperation({
-    summary: 'Listar pacientes activos — con búsqueda por nombre/documento y paginación',
+    summary: 'Listar pacientes por estado — con búsqueda por nombre/documento y paginación',
   })
   @ApiResponse({ status: 200 })
   findAll(@Query() query: FindPatientsQueryDto): Promise<PaginatedResponse<PatientResponseDto>> {

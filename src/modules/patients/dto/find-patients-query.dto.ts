@@ -3,7 +3,23 @@ import { DocumentType } from '@prisma/client';
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
+export enum PatientListStatus {
+  ACTIVE = 'active',
+  INACTIVE = 'inactive',
+  ALL = 'all',
+}
+
 export class FindPatientsQueryDto {
+  @ApiProperty({
+    required: false,
+    enum: PatientListStatus,
+    default: PatientListStatus.ACTIVE,
+    description: 'Estado de los pacientes incluidos en el listado',
+  })
+  @IsOptional()
+  @IsEnum(PatientListStatus)
+  status?: PatientListStatus = PatientListStatus.ACTIVE;
+
   @ApiProperty({
     required: false,
     description: 'Texto libre — busca en nombre y número de documento',
